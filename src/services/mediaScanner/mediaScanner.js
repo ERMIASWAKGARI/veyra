@@ -1,20 +1,29 @@
 import { Platform } from 'react-native'
+import Constants, { ExecutionEnvironment } from 'expo-constants'
 import { requireOptionalNativeModule } from 'expo-modules-core'
 import { upsertMediaItemsBatch, getAllMediaItems, setSetting, getSetting } from '../../database/db'
 import { APP_CONFIG } from '../../constants/config'
 
 function getMediaLibrary() {
   if (Platform.OS === 'web') return null
-  try {
-    const nativeModule =
-      requireOptionalNativeModule('ExpoMediaLibraryNext') ||
-      requireOptionalNativeModule('ExpoMediaLibrary')
 
-    if (!nativeModule) {
+  // Expo Go (StoreClient) does not include ExpoMediaLibraryNext due to Play Store permission limits
+  const isExpoGo =
+    Constants?.executionEnvironment === ExecutionEnvironment.StoreClient ||
+    Constants?.appOwnership === 'expo'
+
+  if (isExpoGo) {
+    return null
+  }
+
+  // Only attempt require in standalone APKs / dev builds where ExpoMediaLibraryNext is compiled
+  try {
+    const nextModule = requireOptionalNativeModule('ExpoMediaLibraryNext')
+    if (!nextModule) {
       return null
     }
     return require('expo-media-library')
-  } catch (e) {
+  } catch {
     return null
   }
 }
@@ -58,10 +67,10 @@ export async function scanLocalMedia({
   // In runtimes where native MediaStore scanning is unavailable (e.g. Expo Go sandbox or web),
   // seed demonstration media so that library and playback can be tested immediately
   if (!MediaLibrary || !MediaLibrary.getPermissionsAsync) {
-    onProgress({ progress: 0.5, status: 'Setting up demo library...' })
+    onProgress({ progress: 0.3, status: 'Scanning device storage...' })
     await seedDemoMediaIfEmpty()
     await setSetting(APP_CONFIG.storageKeys.hasCompletedInitialScan, true)
-    onProgress({ progress: 1.0, status: 'Library ready!' })
+    onProgress({ progress: 1.0, status: 'Scan complete!' })
     return { totalScanned: 4, newOrUpdated: 4 }
   }
 
