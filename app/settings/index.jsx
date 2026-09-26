@@ -7,9 +7,12 @@ import {
   TouchableOpacity,
   Switch,
   Alert,
-  Modal
+  Modal,
+  Image
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+
+const VEYRA_LOGO = require('../../assets/branding/veyra-icon-1024.png')
 import {
   Moon,
   Sun,
@@ -216,9 +219,11 @@ export default function SettingsScreen() {
 
             <View style={styles.row}>
               <View style={styles.rowLeft}>
-                <View style={[styles.iconBox, { backgroundColor: theme.colors.accentSubtle, borderRadius: radii.sm }]}>
-                  <Info size={18} color={theme.colors.accent} />
-                </View>
+                <Image
+                  source={VEYRA_LOGO}
+                  style={{ width: 28, height: 28, borderRadius: radii.sm }}
+                  resizeMode="contain"
+                />
                 <View>
                   <Text style={[styles.rowLabel, { color: theme.colors.textPrimary }]}>{APP_CONFIG.appName}</Text>
                   <Text style={[styles.rowSub, { color: theme.colors.textSecondary }]}>

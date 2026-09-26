@@ -12,7 +12,6 @@ import {
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
-  Sparkles,
   Music2,
   Video as VideoIcon,
   Heart,
@@ -25,6 +24,8 @@ import {
 import { useTheme } from '../src/stores/useTheme'
 import { usePlayback } from '../src/stores/usePlayback'
 import { APP_CONFIG } from '../src/constants/config'
+
+const VEYRA_LOGO = require('../assets/branding/veyra-icon-1024.png')
 import {
   getRecentlyPlayed,
   getRecentlyAdded,
@@ -144,9 +145,11 @@ export default function HomeScreen() {
       {/* Top Header */}
       <View style={[styles.header, { borderBottomColor: theme.colors.borderSubtle }]}>
         <View style={styles.brandRow}>
-          <View style={[styles.logoIcon, { backgroundColor: theme.colors.accent, borderRadius: radii.sm }]}>
-            <Sparkles size={18} color="#FFFFFF" />
-          </View>
+          <Image
+            source={VEYRA_LOGO}
+            style={[styles.logoImage, { borderRadius: radii.sm }]}
+            resizeMode="contain"
+          />
           <Text
             style={[
               styles.appName,
@@ -367,11 +370,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10
   },
-  logoIcon: {
-    width: 28,
-    height: 28,
-    alignItems: 'center',
-    justifyContent: 'center'
+  logoImage: {
+    width: 30,
+    height: 30
   },
   appName: {
     letterSpacing: 0.5
