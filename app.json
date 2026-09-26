@@ -4,7 +4,7 @@
     "slug": "veyra",
     "version": "1.0.0",
     "orientation": "default",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/branding/veyra-icon-1024.png",
     "scheme": "veyra",
     "userInterfaceStyle": "dark",
     "newArchEnabled": false,
@@ -15,9 +15,8 @@
       "package": "com.veyra.player",
       "adaptiveIcon": {
         "backgroundColor": "#0F1015",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "foregroundImage": "./assets/branding/adaptive-icon/ic_launcher_foreground-xxxhdpi-432.png",
+        "backgroundImage": "./assets/branding/adaptive-icon/ic_launcher_background-xxxhdpi-432.png"
       },
       "permissions": [
         "android.permission.READ_MEDIA_AUDIO",
@@ -30,7 +29,7 @@
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png",
+      "favicon": "./assets/branding/veyra-icon-playstore-512.png",
       "bundler": "metro"
     },
     "plugins": [
