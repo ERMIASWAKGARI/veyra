@@ -290,7 +290,11 @@ class NativePlaybackEngineWrapper {
       // Native fallback (Expo Go / Dev mode without custom native module)
       if (this.nativePlayer) {
         try {
-          this.nativePlayer.replace(mediaItem.uri)
+          if (this.nativePlayer.replaceAsync) {
+            this.nativePlayer.replaceAsync(mediaItem.uri).catch(() => {})
+          } else {
+            this.nativePlayer.replace(mediaItem.uri)
+          }
           this.nativePlayer.volume = 1.0
           this.nativePlayer.muted = false
           this.nativePlayer.playbackRate = this.fallbackState.speed

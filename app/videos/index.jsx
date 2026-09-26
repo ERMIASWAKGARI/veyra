@@ -54,19 +54,19 @@ export default function VideosScreen() {
     try {
       let list = []
       if (activeTab === 'all') {
-        list = await getAllMediaItems({ type: 'video', sortBy: 'title', order: 'ASC' })
+        list = (await getAllMediaItems({ type: 'video', sortBy: 'title', order: 'ASC' }).catch(() => [])) || []
       } else if (activeTab === 'folders') {
-        const folderList = await getFoldersSummary('video')
+        const folderList = (await getFoldersSummary('video').catch(() => [])) || []
         setFolders(folderList)
       } else if (activeTab === 'favorites') {
-        list = await getFavorites('video')
+        list = (await getFavorites('video').catch(() => [])) || []
       } else if (activeTab === 'recent') {
-        list = await getRecentlyPlayed('video')
+        list = (await getRecentlyPlayed('video').catch(() => [])) || []
       }
-      setVideos(list)
+      setVideos(list || [])
 
       // Preload favorites map and resume positions
-      const favList = await getFavorites('video')
+      const favList = (await getFavorites('video').catch(() => [])) || []
       const fMap = {}
       favList.forEach((f) => {
         fMap[f.id] = true
@@ -74,15 +74,19 @@ export default function VideosScreen() {
       setFavoritesMap(fMap)
 
       const positions = {}
-      for (const item of list) {
-        const state = await getPlaybackState(item.id)
-        if (state && state.position > 5000) {
-          positions[item.id] = state.position
-        }
+      for (const item of (list || [])) {
+        try {
+          const state = await getPlaybackState(item.id)
+          if (state && state.position > 5000) {
+            positions[item.id] = state.position
+          }
+        } catch {}
       }
       setResumePositions(positions)
     } catch (e) {
       console.warn('Error loading video data:', e)
+    } finally {
+      setRefreshing(false)
     }
   }, [activeTab])
 

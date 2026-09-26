@@ -3,27 +3,34 @@ import { TABLE_STATEMENTS } from './schema'
 import { APP_CONFIG } from '../constants/config'
 import * as webDb from './db.web'
 
-let dbInstance = null
+let dbPromise = null
 
-export async function getDatabase() {
+export function getDatabase() {
   if (Platform.OS === 'web') {
     return webDb.getDatabase()
   }
-  if (!dbInstance) {
-    const SQLite = require('expo-sqlite')
-    dbInstance = await SQLite.openDatabaseAsync(APP_CONFIG.database.name)
-    try {
-      await dbInstance.execAsync('PRAGMA foreign_keys = ON;')
-    } catch {}
-    for (const sql of TABLE_STATEMENTS) {
+  if (!dbPromise) {
+    dbPromise = (async () => {
+      const SQLite = require('expo-sqlite')
+      const db = await SQLite.openDatabaseAsync(APP_CONFIG.database.name)
       try {
-        await dbInstance.execAsync(sql)
-      } catch (err) {
-        console.warn('DB init statement error:', err)
+        await db.execAsync('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;')
+      } catch {}
+      for (const sql of TABLE_STATEMENTS) {
+        try {
+          await db.execAsync(sql)
+        } catch (err) {
+          console.warn('DB init statement error:', err)
+        }
       }
-    }
+      return db
+    })().catch((err) => {
+      dbPromise = null
+      console.warn('Database initialization failed:', err)
+      throw err
+    })
   }
-  return dbInstance
+  return dbPromise
 }
 
 // ----------------- Media Items Repository -----------------
@@ -449,15 +456,15 @@ export async function getLastPlaybackState(isVideo = 0) {
 export async function getContinueWatchingVideos(limit = 10) {
   if (Platform.OS === 'web') return webDb.getContinueWatchingVideos(limit)
   const db = await getDatabase()
-  return await db.getAllAsync(
+  return (await db.getAllAsync(
     `SELECT m.*, ps.position, ps.duration, ps.updatedAt as lastWatchedAt
      FROM playback_state ps
      JOIN media_items m ON ps.mediaId = m.id
-     WHERE ps.isVideo = 1 AND ps.position > 5000 AND (CAST(ps.position AS REAL) / MAX(ps.duration, 1)) < 0.95
+     WHERE ps.isVideo = 1 AND ps.position > 5000 AND ps.duration > 0 AND (CAST(ps.position AS REAL) / ps.duration) < 0.95
      ORDER BY ps.updatedAt DESC
      LIMIT ?`,
-    [limit]
-  )
+    [Number(limit) || 10]
+  )) || []
 }
 
 // ----------------- Settings Repository -----------------

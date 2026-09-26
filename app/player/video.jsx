@@ -64,7 +64,11 @@ export default function VideoPlayerScreen() {
   useEffect(() => {
     if (player && currentMedia?.uri) {
       try {
-        player.replace(currentMedia.uri)
+        if (player.replaceAsync) {
+          player.replaceAsync(currentMedia.uri).catch(() => {})
+        } else {
+          player.replace(currentMedia.uri)
+        }
         player.volume = 1.0
         player.muted = false
         player.play()

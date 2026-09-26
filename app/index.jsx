@@ -62,22 +62,22 @@ export default function HomeScreen() {
   const loadDashboardData = useCallback(async () => {
     try {
       const [recentAudio, addedAudio, watching, vids, favs, pls, lastAudio] = await Promise.all([
-        getRecentlyPlayed('audio', 8),
-        getRecentlyAdded('audio', 10),
-        getContinueWatchingVideos(4),
-        getAllMediaItems({ type: 'video', limit: 6 }),
-        getFavorites('audio'),
-        getPlaylists(),
-        getLastPlaybackState(0)
+        getRecentlyPlayed('audio', 8).catch(() => []),
+        getRecentlyAdded('audio', 10).catch(() => []),
+        getContinueWatchingVideos(4).catch(() => []),
+        getAllMediaItems({ type: 'video', limit: 6 }).catch(() => []),
+        getFavorites('audio').catch(() => []),
+        getPlaylists().catch(() => []),
+        getLastPlaybackState(0).catch(() => null)
       ])
 
-      setRecentlyPlayedAudio(recentAudio)
-      setRecentlyAddedAudio(addedAudio)
-      setContinueWatching(watching)
-      setAllVideos(vids)
-      setFavoriteAudio(favs.slice(0, 6))
-      setPlaylists(pls.slice(0, 4))
-      setLastAudioSession(lastAudio)
+      setRecentlyPlayedAudio(recentAudio || [])
+      setRecentlyAddedAudio(addedAudio || [])
+      setContinueWatching(watching || [])
+      setAllVideos(vids || [])
+      setFavoriteAudio((favs || []).slice(0, 6))
+      setPlaylists((pls || []).slice(0, 4))
+      setLastAudioSession(lastAudio || null)
     } catch (e) {
       console.warn('Dashboard data fetch error:', e)
     } finally {

@@ -1,9 +1,14 @@
 import { Platform } from 'react-native'
 import Constants, { ExecutionEnvironment } from 'expo-constants'
 import { requireOptionalNativeModule } from 'expo-modules-core'
-import * as FileSystem from 'expo-file-system'
+import * as FileSystemLegacy from 'expo-file-system/legacy'
+import * as FileSystemModern from 'expo-file-system'
 import { upsertMediaItemsBatch, getAllMediaItems, setSetting, getSetting, clearDemoMedia } from '../../database/db'
 import { APP_CONFIG } from '../../constants/config'
+
+function getSAF() {
+  return FileSystemLegacy?.StorageAccessFramework || FileSystemModern?.StorageAccessFramework || null
+}
 
 /**
  * Dynamically resolves the MediaLibrary module:
@@ -272,13 +277,18 @@ export async function scanLocalMedia({
  */
 export async function scanCustomFolderSAF({ onProgress = () => {} } = {}) {
   if (Platform.OS !== 'android') return { totalScanned: 0, newOrUpdated: 0 }
+  const SAF = getSAF()
+  if (!SAF || !SAF.requestDirectoryPermissionsAsync) {
+    console.warn('StorageAccessFramework is not available on this platform/runtime.')
+    return { totalScanned: 0, newOrUpdated: 0, error: 'StorageAccessFramework unavailable' }
+  }
   try {
     let initialUri = null
     try {
-      initialUri = FileSystem.StorageAccessFramework.getUriForDirectoryInRoot('Music')
+      initialUri = SAF.getUriForDirectoryInRoot('Music')
     } catch {}
 
-    const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri)
+    const permissions = await SAF.requestDirectoryPermissionsAsync(initialUri)
     if (!permissions.granted) {
       return { totalScanned: 0, newOrUpdated: 0, cancelled: true }
     }
@@ -299,7 +309,7 @@ export async function scanCustomFolderSAF({ onProgress = () => {} } = {}) {
     while (dirQueue.length > 0 && itemsToUpsert.length < 5000) {
       const current = dirQueue.shift()
       try {
-        const fileUris = await FileSystem.StorageAccessFramework.readDirectoryAsync(current.uri)
+        const fileUris = await SAF.readDirectoryAsync(current.uri)
 
         for (const fileUri of fileUris) {
           try {
@@ -340,10 +350,13 @@ export async function scanCustomFolderSAF({ onProgress = () => {} } = {}) {
             } else if (current.depth < 5 && !visitedDirs.has(fileUri)) {
               // Check if sub-element is a directory
               try {
-                const info = await FileSystem.getInfoAsync(fileUri)
-                if (info.isDirectory) {
-                  visitedDirs.add(fileUri)
-                  dirQueue.push({ uri: fileUri, depth: current.depth + 1 })
+                const getInfo = FileSystemLegacy?.getInfoAsync || FileSystemModern?.getInfoAsync
+                if (getInfo) {
+                  const info = await getInfo(fileUri)
+                  if (info && info.isDirectory) {
+                    visitedDirs.add(fileUri)
+                    dirQueue.push({ uri: fileUri, depth: current.depth + 1 })
+                  }
                 }
               } catch {}
             }
