@@ -18,18 +18,20 @@ import {
   Sun,
   Laptop,
   FolderSync,
+  FolderPlus,
   Trash2,
   ShieldCheck,
   Info,
   Clock,
   Gauge,
   Check,
-  Volume2
+  Volume2,
+  Sparkles
 } from 'lucide-react-native'
 import { useTheme } from '../../src/stores/useTheme'
 import { APP_CONFIG } from '../../src/constants/config'
-import { scanLocalMedia } from '../../src/services/mediaScanner/mediaScanner'
-import { clearAllLibraryData } from '../../src/database/db'
+import { scanLocalMedia, scanCustomFolderSAF } from '../../src/services/mediaScanner/mediaScanner'
+import { clearAllLibraryData, clearDemoMedia } from '../../src/database/db'
 import { Header } from '../../src/components/Header'
 
 export default function SettingsScreen() {
@@ -44,13 +46,45 @@ export default function SettingsScreen() {
   const handleRescan = async () => {
     try {
       setIsScanning(true)
-      await scanLocalMedia()
-      Alert.alert('Scan Complete', 'Your local library has been updated.')
+      const res = await scanLocalMedia()
+      Alert.alert('Scan Complete', `Indexed ${res.totalScanned || 0} media items.`)
     } catch {
       Alert.alert('Scan Notice', 'Media scan finished.')
     } finally {
       setIsScanning(false)
     }
+  }
+
+  const handlePickFolder = async () => {
+    try {
+      setIsScanning(true)
+      const res = await scanCustomFolderSAF()
+      if (!res.cancelled) {
+        Alert.alert('Folder Import Complete', `Added ${res.newOrUpdated || 0} tracks to your library.`)
+      }
+    } catch (e) {
+      Alert.alert('Folder Import Notice', e.message || 'Folder scan completed.')
+    } finally {
+      setIsScanning(false)
+    }
+  }
+
+  const handleClearDemoMedia = async () => {
+    Alert.alert(
+      'Remove Demo Tracks',
+      'Remove sample demo songs and sample videos from your library?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            await clearDemoMedia()
+            Alert.alert('Removed', 'Sample demo tracks removed.')
+          }
+        }
+      ]
+    )
   }
 
   const handleClearCache = () => {
@@ -163,6 +197,26 @@ export default function SettingsScreen() {
             LIBRARY & STORAGE
           </Text>
           <View style={[styles.card, { backgroundColor: theme.colors.surfaceElevated, borderColor: theme.colors.border, borderRadius: radii.md }]}>
+            {Platform.OS === 'android' && (
+              <TouchableOpacity
+                style={[styles.row, { borderBottomColor: theme.colors.borderSubtle, borderBottomWidth: 1 }]}
+                onPress={handlePickFolder}
+                disabled={isScanning}
+              >
+                <View style={styles.rowLeft}>
+                  <View style={[styles.iconBox, { backgroundColor: theme.colors.accentSubtle, borderRadius: radii.sm }]}>
+                    <FolderPlus size={18} color={theme.colors.accent} />
+                  </View>
+                  <View>
+                    <Text style={[styles.rowLabel, { color: theme.colors.textPrimary }]}>Choose Music Folder (SAF)</Text>
+                    <Text style={[styles.rowSub, { color: theme.colors.textSecondary }]}>
+                      Select a specific folder (e.g. Music, Downloads) to import
+                    </Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            )}
+
             <TouchableOpacity
               style={[styles.row, { borderBottomColor: theme.colors.borderSubtle, borderBottomWidth: 1 }]}
               onPress={handleRescan}
@@ -176,6 +230,23 @@ export default function SettingsScreen() {
                   <Text style={[styles.rowLabel, { color: theme.colors.textPrimary }]}>Rescan Library</Text>
                   <Text style={[styles.rowSub, { color: theme.colors.textSecondary }]}>
                     Scan device for newly added music and videos
+                  </Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.row, { borderBottomColor: theme.colors.borderSubtle, borderBottomWidth: 1 }]}
+              onPress={handleClearDemoMedia}
+            >
+              <View style={styles.rowLeft}>
+                <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.15)', borderRadius: radii.sm }]}>
+                  <Sparkles size={18} color={theme.colors.warning} />
+                </View>
+                <View>
+                  <Text style={[styles.rowLabel, { color: theme.colors.textPrimary }]}>Remove Demo Tracks</Text>
+                  <Text style={[styles.rowSub, { color: theme.colors.textSecondary }]}>
+                    Remove sample demo songs and video from library
                   </Text>
                 </View>
               </View>

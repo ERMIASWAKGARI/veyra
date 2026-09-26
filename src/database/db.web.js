@@ -339,6 +339,14 @@ export async function setSetting(key, value) {
   webStorage.settings.set(key, value)
 }
 
+export async function clearDemoMedia() {
+  for (const key of webStorage.media.keys()) {
+    if (key.startsWith('demo_')) {
+      webStorage.media.delete(key)
+    }
+  }
+}
+
 export async function clearAllLibraryData() {
   webStorage.media.clear()
   webStorage.playlists.clear()
@@ -347,3 +355,4 @@ export async function clearAllLibraryData() {
   webStorage.history = []
   webStorage.playbackState.clear()
 }
+

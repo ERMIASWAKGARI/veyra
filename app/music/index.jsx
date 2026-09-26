@@ -22,7 +22,8 @@ import {
   Folder,
   Heart,
   Check,
-  FolderSync
+  FolderSync,
+  FolderPlus
 } from 'lucide-react-native'
 import { useTheme } from '../../src/stores/useTheme'
 import { usePlayback } from '../../src/stores/usePlayback'
@@ -181,6 +182,19 @@ export default function MusicScreen() {
         </Text>
 
         <View style={styles.headerActions}>
+          {Platform.OS === 'android' && (
+            <TouchableOpacity
+              style={[
+                styles.iconButton,
+                { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full, marginRight: spacing.xs }
+              ]}
+              onPress={handlePickFolder}
+              disabled={isScanning}
+            >
+              <FolderPlus size={16} color={theme.colors.accent} />
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity
             style={[styles.iconButton, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full }]}
             onPress={handleScanAudio}

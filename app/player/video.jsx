@@ -30,6 +30,7 @@ import { savePlaybackState, getPlaybackState, recordPlayHistory } from '../../sr
 import { formatTime } from '../../src/utils/format'
 import { SpeedModal } from '../../src/components/SpeedModal'
 import { APP_CONFIG } from '../../src/constants/config'
+import { NativePlaybackEngine } from '../../src/playback/NativePlaybackEngine'
 
 export default function VideoPlayerScreen() {
   const router = useRouter()
@@ -45,12 +46,42 @@ export default function VideoPlayerScreen() {
 
   const controlsTimeoutRef = useRef(null)
 
-  // Initialize Media3 video player
+  // Pause background audio when video player opens
+  useEffect(() => {
+    NativePlaybackEngine.pause().catch(() => {})
+  }, [])
+
+  // Initialize Media3 video player with explicit volume and unmuted state
   const player = useVideoPlayer(currentMedia?.uri || '', (p) => {
     p.loop = false
     p.playbackRate = currentSpeed
+    p.volume = 1.0
+    p.muted = false
     p.play()
   })
+
+  // Handle media switching
+  useEffect(() => {
+    if (player && currentMedia?.uri) {
+      try {
+        player.replace(currentMedia.uri)
+        player.volume = 1.0
+        player.muted = false
+        player.play()
+      } catch (err) {
+        console.warn('Video replace error:', err)
+      }
+    }
+  }, [currentMedia?.uri, player])
+
+  // Pause video on unmount
+  useEffect(() => {
+    return () => {
+      try {
+        player?.pause()
+      } catch {}
+    }
+  }, [player])
 
   // Restore resume position from SQLite
   useEffect(() => {

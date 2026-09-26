@@ -108,3 +108,8 @@ export async function seedDemoMediaIfEmpty() {
 
   await upsertMediaItemsBatch([...DEMO_AUDIO, ...DEMO_VIDEOS])
 }
+
+export async function scanCustomFolderSAF() {
+  return { totalScanned: 0, newOrUpdated: 0 }
+}
+

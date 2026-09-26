@@ -7,7 +7,8 @@ import {
   TouchableOpacity,
   RefreshControl,
   Image,
-  ActivityIndicator
+  ActivityIndicator,
+  Platform
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -17,6 +18,7 @@ import {
   Heart,
   ListMusic,
   FolderSync,
+  FolderPlus,
   Play,
   Clock,
   ChevronRight
@@ -84,20 +86,27 @@ export default function HomeScreen() {
   }, [])
 
   useEffect(() => {
-    // Initial load and guarantee demo tracks if database is empty
-    seedDemoMediaIfEmpty().then(() => {
+    // Only seed demo tracks in web preview environment
+    if (Platform.OS === 'web') {
+      seedDemoMediaIfEmpty().then(() => {
+        loadDashboardData()
+      })
+    } else {
       loadDashboardData()
-    })
+    }
   }, [loadDashboardData])
 
   const handleScan = async () => {
     try {
       setIsScanning(true)
-      setScanStatus('Discovering local media...')
-      await scanLocalMedia({
+      setScanStatus('Scanning device storage...')
+      const result = await scanLocalMedia({
         onProgress: ({ status }) => setScanStatus(status)
       })
       await loadDashboardData()
+      if (result && result.permissionDenied && Platform.OS === 'android') {
+        await handlePickFolder()
+      }
     } catch (err) {
       console.warn('Scan error:', err)
     } finally {
@@ -160,23 +169,42 @@ export default function HomeScreen() {
           </Text>
         </View>
 
-        <TouchableOpacity
-          style={[styles.scanButton, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full }]}
-          activeOpacity={0.8}
-          onPress={handleScan}
-          disabled={isScanning}
-        >
-          {isScanning ? (
-            <ActivityIndicator size="small" color={theme.colors.accent} />
-          ) : (
-            <>
-              <FolderSync size={16} color={theme.colors.textPrimary} />
+        <View style={styles.headerActions}>
+          {Platform.OS === 'android' && (
+            <TouchableOpacity
+              style={[
+                styles.scanButton,
+                { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full, marginRight: spacing.xs }
+              ]}
+              activeOpacity={0.8}
+              onPress={handlePickFolder}
+              disabled={isScanning}
+            >
+              <FolderPlus size={16} color={theme.colors.accent} />
               <Text style={[styles.scanButtonText, { color: theme.colors.textPrimary }]}>
-                Scan
+                Folder
               </Text>
-            </>
+            </TouchableOpacity>
           )}
-        </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.scanButton, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full }]}
+            activeOpacity={0.8}
+            onPress={handleScan}
+            disabled={isScanning}
+          >
+            {isScanning ? (
+              <ActivityIndicator size="small" color={theme.colors.accent} />
+            ) : (
+              <>
+                <FolderSync size={16} color={theme.colors.textPrimary} />
+                <Text style={[styles.scanButtonText, { color: theme.colors.textPrimary }]}>
+                  Scan
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Scanning status banner */}
@@ -376,6 +404,10 @@ const styles = StyleSheet.create({
   },
   appName: {
     letterSpacing: 0.5
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center'
   },
   scanButton: {
     flexDirection: 'row',

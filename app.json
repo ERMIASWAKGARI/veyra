@@ -39,7 +39,8 @@
         {
           "photosPermission": "Grant VEYRA access to media files.",
           "savePhotosPermission": "Grant VEYRA access to media files.",
-          "isAccessMediaLocationEnabled": false
+          "isAccessMediaLocationEnabled": false,
+          "granularPermissions": ["audio", "video"]
         }
       ]
     ]

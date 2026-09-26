@@ -2,9 +2,18 @@ import { NativeModules, NativeEventEmitter, Platform } from 'react-native'
 
 const { VeyraPlayback } = NativeModules
 
+let createVideoPlayer = null
+try {
+  const expoVideo = require('expo-video')
+  createVideoPlayer = expoVideo.createVideoPlayer
+} catch (e) {
+  console.warn('Could not load expo-video in NativePlaybackEngine:', e)
+}
+
 /**
  * NativePlaybackEngine encapsulates communication with the Android Jetpack Media3
- * MediaSessionService, or falls back to standard HTML5/WebAudio in dev/web environments.
+ * MediaSessionService, or falls back to standard HTML5/WebAudio in dev/web environments
+ * and expo-video ExoPlayer on native devices without the custom native module.
  */
 class NativePlaybackEngineWrapper {
   constructor() {
@@ -12,7 +21,7 @@ class NativePlaybackEngineWrapper {
     this.eventEmitter = this.isNativeAvailable ? new NativeEventEmitter(VeyraPlayback) : null
     this.listeners = new Set()
 
-    // Web / Fallback player state if native module is not present
+    // Fallback player state if custom native module is not present
     this.fallbackState = {
       isPlaying: false,
       playbackState: 1, // 1: IDLE, 2: BUFFERING, 3: READY, 4: ENDED
@@ -25,7 +34,9 @@ class NativePlaybackEngineWrapper {
       queue: [],
       currentIndex: -1
     }
-    this.fallbackAudio = null
+    this.fallbackAudio = null // For Web
+    this.nativePlayer = null  // For Native fallback (Expo Go / Dev mode)
+    this.nativePlayerSubscriptions = []
     this.shuffledIndices = []
 
     if (this.isNativeAvailable && this.eventEmitter) {
@@ -199,20 +210,99 @@ class NativePlaybackEngineWrapper {
     }
   }
 
+  _initNativePlayer(uri) {
+    if (Platform.OS === 'web' || !createVideoPlayer) return
+
+    this._cleanupNativePlayer()
+
+    try {
+      this.nativePlayer = createVideoPlayer(uri)
+      this.nativePlayer.loop = false
+      this.nativePlayer.volume = 1.0
+      this.nativePlayer.muted = false
+      this.nativePlayer.playbackRate = this.fallbackState.speed
+      this.nativePlayer.timeUpdateEventInterval = 0.25
+
+      const subPlaying = this.nativePlayer.addListener('playingChange', ({ isPlaying }) => {
+        this.fallbackState.isPlaying = isPlaying
+        this.fallbackState.playbackState = isPlaying ? 3 : 1
+        this._emitFallbackState()
+      })
+
+      const subTime = this.nativePlayer.addListener('timeUpdate', ({ currentTime }) => {
+        this.fallbackState.position = (currentTime || 0) * 1000
+        if (this.nativePlayer?.duration && this.nativePlayer.duration > 0) {
+          this.fallbackState.duration = this.nativePlayer.duration * 1000
+        }
+        this._emitFallbackState()
+      })
+
+      const subStatus = this.nativePlayer.addListener('statusChange', ({ status, error }) => {
+        if (error) {
+          console.warn('Native fallback player status error:', error)
+          this.notify('onPlayerError', { errorCode: 1, message: error?.message || 'Playback failed' })
+        }
+      })
+
+      const subEnd = this.nativePlayer.addListener('playToEnd', () => {
+        this._onTrackEnded()
+      })
+
+      this.nativePlayerSubscriptions = [subPlaying, subTime, subStatus, subEnd]
+    } catch (e) {
+      console.warn('Failed to initialize native fallback player:', e)
+    }
+  }
+
+  _cleanupNativePlayer() {
+    if (this.nativePlayerSubscriptions) {
+      for (const sub of this.nativePlayerSubscriptions) {
+        try { sub.remove?.() } catch {}
+      }
+      this.nativePlayerSubscriptions = []
+    }
+    if (this.nativePlayer) {
+      try {
+        this.nativePlayer.pause()
+        this.nativePlayer.release?.()
+      } catch {}
+      this.nativePlayer = null
+    }
+  }
+
   _playFallback(mediaItem) {
-    this._initAudioElementIfNeeded()
+    if (!mediaItem) return
+
     this.fallbackState.currentMedia = mediaItem
     this.fallbackState.position = 0
     this.fallbackState.duration = mediaItem.duration || 0
     this.fallbackState.isPlaying = true
     this.fallbackState.playbackState = 3
 
-    if (this.fallbackAudio && mediaItem.uri) {
-      this.fallbackAudio.src = mediaItem.uri
-      this.fallbackAudio.playbackRate = this.fallbackState.speed
-      this.fallbackAudio.play().catch(() => {
-        // Autoplay policy or corrupt file handling
-      })
+    if (Platform.OS === 'web') {
+      this._initAudioElementIfNeeded()
+      if (this.fallbackAudio && mediaItem.uri) {
+        this.fallbackAudio.src = mediaItem.uri
+        this.fallbackAudio.playbackRate = this.fallbackState.speed
+        this.fallbackAudio.play().catch(() => {})
+      }
+    } else {
+      // Native fallback (Expo Go / Dev mode without custom native module)
+      if (this.nativePlayer) {
+        try {
+          this.nativePlayer.replace(mediaItem.uri)
+          this.nativePlayer.volume = 1.0
+          this.nativePlayer.muted = false
+          this.nativePlayer.playbackRate = this.fallbackState.speed
+          this.nativePlayer.play()
+        } catch (e) {
+          this._initNativePlayer(mediaItem.uri)
+          this.nativePlayer?.play()
+        }
+      } else {
+        this._initNativePlayer(mediaItem.uri)
+        this.nativePlayer?.play()
+      }
     }
 
     this.notify('onMediaChanged', { media: mediaItem })
@@ -221,16 +311,20 @@ class NativePlaybackEngineWrapper {
 
   _pauseFallback() {
     this.fallbackState.isPlaying = false
-    if (this.fallbackAudio) {
+    if (Platform.OS === 'web' && this.fallbackAudio) {
       this.fallbackAudio.pause()
+    } else if (this.nativePlayer) {
+      this.nativePlayer.pause()
     }
     this._emitFallbackState()
   }
 
   _resumeFallback() {
     this.fallbackState.isPlaying = true
-    if (this.fallbackAudio) {
+    if (Platform.OS === 'web' && this.fallbackAudio) {
       this.fallbackAudio.play().catch(() => {})
+    } else if (this.nativePlayer) {
+      this.nativePlayer.play()
     }
     this._emitFallbackState()
   }
@@ -238,17 +332,22 @@ class NativePlaybackEngineWrapper {
   _stopFallback() {
     this.fallbackState.isPlaying = false
     this.fallbackState.position = 0
-    if (this.fallbackAudio) {
+    if (Platform.OS === 'web' && this.fallbackAudio) {
       this.fallbackAudio.pause()
       this.fallbackAudio.currentTime = 0
+    } else if (this.nativePlayer) {
+      this.nativePlayer.pause()
+      this.nativePlayer.currentTime = 0
     }
     this._emitFallbackState()
   }
 
   _seekFallback(positionMs) {
     this.fallbackState.position = positionMs
-    if (this.fallbackAudio) {
+    if (Platform.OS === 'web' && this.fallbackAudio) {
       this.fallbackAudio.currentTime = positionMs / 1000
+    } else if (this.nativePlayer) {
+      this.nativePlayer.currentTime = positionMs / 1000
     }
     this._emitFallbackState()
   }
@@ -309,8 +408,10 @@ class NativePlaybackEngineWrapper {
 
   _setSpeedFallback(speed) {
     this.fallbackState.speed = speed
-    if (this.fallbackAudio) {
+    if (Platform.OS === 'web' && this.fallbackAudio) {
       this.fallbackAudio.playbackRate = speed
+    } else if (this.nativePlayer) {
+      this.nativePlayer.playbackRate = speed
     }
     this._emitFallbackState()
   }
@@ -370,9 +471,12 @@ class NativePlaybackEngineWrapper {
   _onTrackEnded() {
     if (this.fallbackState.repeatMode === 1) {
       // Repeat One
-      if (this.fallbackAudio) {
+      if (Platform.OS === 'web' && this.fallbackAudio) {
         this.fallbackAudio.currentTime = 0
         this.fallbackAudio.play().catch(() => {})
+      } else if (this.nativePlayer) {
+        this.nativePlayer.currentTime = 0
+        this.nativePlayer.play()
       }
       this.fallbackState.position = 0
       this._emitFallbackState()

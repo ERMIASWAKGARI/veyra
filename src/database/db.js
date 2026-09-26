@@ -485,6 +485,12 @@ export async function setSetting(key, value) {
   )
 }
 
+export async function clearDemoMedia() {
+  if (Platform.OS === 'web') return webDb.clearDemoMedia()
+  const db = await getDatabase()
+  await db.runAsync("DELETE FROM media_items WHERE id LIKE 'demo_%'")
+}
+
 export async function clearAllLibraryData() {
   if (Platform.OS === 'web') return webDb.clearAllLibraryData()
   const db = await getDatabase()
@@ -500,3 +506,4 @@ export async function clearAllLibraryData() {
     await db.runAsync('DELETE FROM folders')
   })
 }
+
