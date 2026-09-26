@@ -1,7 +1,16 @@
-import * as MediaLibrary from 'expo-media-library'
 import { Platform } from 'react-native'
 import { upsertMediaItemsBatch, getAllMediaItems, setSetting, getSetting } from '../../database/db'
 import { APP_CONFIG } from '../../constants/config'
+
+function getMediaLibrary() {
+  if (Platform.OS === 'web') return null
+  try {
+    return require('expo-media-library')
+  } catch (e) {
+    console.warn('Native expo-media-library module not loaded in this runtime (e.g. Expo Go):', e?.message)
+    return null
+  }
+}
 
 /**
  * Cleanly formats a title from a filename (removes extension, cleans underscores/hyphens)
@@ -20,7 +29,6 @@ function extractFolderName(uri, filename) {
   try {
     const parts = uri.split('/')
     if (parts.length > 2) {
-      // Return parent folder
       return decodeURIComponent(parts[parts.length - 2])
     }
   } catch {
@@ -38,9 +46,21 @@ export async function scanLocalMedia({
   scanVideo = true,
   forceFullRescan = false
 } = {}) {
+  const MediaLibrary = getMediaLibrary()
+
+  // In runtimes where native MediaStore scanning is unavailable (e.g. Expo Go sandbox),
+  // seed demonstration media so that library and playback can be tested immediately
+  if (!MediaLibrary || !MediaLibrary.getPermissionsAsync) {
+    onProgress({ progress: 0.5, status: 'Setting up demo library...' })
+    await seedDemoMediaIfEmpty()
+    await setSetting(APP_CONFIG.storageKeys.hasCompletedInitialScan, true)
+    onProgress({ progress: 1.0, status: 'Library ready!' })
+    return { totalScanned: 4, newOrUpdated: 4 }
+  }
+
   // Check platform permissions
   if (Platform.OS !== 'web') {
-    const { status, canAskAgain } = await MediaLibrary.getPermissionsAsync()
+    const { status } = await MediaLibrary.getPermissionsAsync()
     if (status !== 'granted') {
       const requestResult = await MediaLibrary.requestPermissionsAsync()
       if (requestResult.status !== 'granted') {
@@ -50,8 +70,8 @@ export async function scanLocalMedia({
   }
 
   const mediaTypes = []
-  if (scanAudio) mediaTypes.push(MediaLibrary.MediaType.audio)
-  if (scanVideo) mediaTypes.push(MediaLibrary.MediaType.video)
+  if (scanAudio && MediaLibrary.MediaType?.audio) mediaTypes.push(MediaLibrary.MediaType.audio)
+  if (scanVideo && MediaLibrary.MediaType?.video) mediaTypes.push(MediaLibrary.MediaType.video)
 
   if (mediaTypes.length === 0) return { totalScanned: 0, newOrUpdated: 0 }
 
@@ -108,7 +128,6 @@ export async function scanLocalMedia({
             dateModified: asset.modificationTime ? asset.modificationTime * 1000 : Date.now()
           })
         } catch (itemErr) {
-          // Tolerate individual bad files without stopping scan
           console.warn('Skipping unparsable asset:', asset.filename, itemErr)
         }
       }
@@ -140,7 +159,7 @@ export async function scanLocalMedia({
 }
 
 /**
- * Seed demonstration media for web/simulator environments where MediaStore is empty
+ * Seed demonstration media for web/simulator/Expo Go environments where MediaStore is restricted
  */
 export async function seedDemoMediaIfEmpty() {
   const existingAudio = await getAllMediaItems({ type: 'audio', limit: 1 })

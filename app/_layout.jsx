@@ -141,6 +141,21 @@ function RootContent() {
   )
 }
 
+export function ErrorBoundary({ error, retry }) {
+  return (
+    <View style={{ flex: 1, backgroundColor: '#0B0C10', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <Text style={{ color: '#F6F7F9', fontSize: 18, fontWeight: 'bold', marginBottom: 8 }}>Unable to load screen</Text>
+      <Text style={{ color: '#9CA3AF', fontSize: 14, textAlign: 'center', marginBottom: 20 }}>{error?.message || 'An unexpected error occurred'}</Text>
+      <TouchableOpacity
+        style={{ backgroundColor: '#4F46E5', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8 }}
+        onPress={retry}
+      >
+        <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>Retry</Text>
+      </TouchableOpacity>
+    </View>
+  )
+}
+
 export default function RootLayout() {
   return (
     <SafeAreaProvider>

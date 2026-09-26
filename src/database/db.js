@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite'
-import { CREATE_TABLES_SQL } from './schema'
+import { TABLE_STATEMENTS } from './schema'
 import { APP_CONFIG } from '../constants/config'
 
 let dbInstance = null
@@ -7,8 +7,16 @@ let dbInstance = null
 export async function getDatabase() {
   if (!dbInstance) {
     dbInstance = await SQLite.openDatabaseAsync(APP_CONFIG.database.name)
-    await dbInstance.execAsync('PRAGMA foreign_keys = ON;')
-    await dbInstance.execAsync(CREATE_TABLES_SQL)
+    try {
+      await dbInstance.execAsync('PRAGMA foreign_keys = ON;')
+    } catch {}
+    for (const sql of TABLE_STATEMENTS) {
+      try {
+        await dbInstance.execAsync(sql)
+      } catch (err) {
+        console.warn('DB init statement error:', err)
+      }
+    }
   }
   return dbInstance
 }
