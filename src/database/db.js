@@ -37,8 +37,7 @@ export async function upsertMediaItem(item) {
       duration, size, mimeType, year, trackNumber, discNumber,
       artworkUri, folder, dateAdded, dateModified
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      uri=excluded.uri,
+    ON CONFLICT(uri) DO UPDATE SET
       title=excluded.title,
       artist=excluded.artist,
       album=excluded.album,
@@ -80,11 +79,13 @@ export async function upsertMediaItemsBatch(items) {
   if (!items || items.length === 0) return
   if (Platform.OS === 'web') return webDb.upsertMediaItemsBatch(items)
   const db = await getDatabase()
-  await db.withTransactionAsync(async () => {
-    for (const item of items) {
+  for (const item of items) {
+    try {
       await upsertMediaItem(item)
+    } catch (err) {
+      console.warn('Upsert single item failed:', item?.title, err?.message || err)
     }
-  })
+  }
 }
 
 export async function getAllMediaItems({

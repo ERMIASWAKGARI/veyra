@@ -8,6 +8,8 @@ export function EmptyState({
   message = 'Scan your device to build your library.',
   actionLabel = 'Scan Device',
   onAction,
+  secondaryActionLabel,
+  onSecondaryAction,
   loading = false
 }) {
   const { theme, spacing, radii, typography } = useTheme()
@@ -55,6 +57,22 @@ export function EmptyState({
           )}
         </TouchableOpacity>
       )}
+
+      {onSecondaryAction && secondaryActionLabel && (
+        <TouchableOpacity
+          style={[
+            styles.secondaryButton,
+            { borderColor: theme.colors.borderSubtle, borderRadius: radii.md }
+          ]}
+          activeOpacity={0.8}
+          onPress={onSecondaryAction}
+          disabled={loading}
+        >
+          <Text style={[styles.secondaryButtonText, { color: theme.colors.textPrimary, fontWeight: typography.weights.medium }]}>
+            {secondaryActionLabel}
+          </Text>
+        </TouchableOpacity>
+      )}
     </View>
   )
 }
@@ -92,6 +110,18 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: '#FFFFFF',
+    fontSize: 14
+  },
+  secondaryButton: {
+    marginTop: 10,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    minWidth: 140
+  },
+  secondaryButtonText: {
     fontSize: 14
   }
 })

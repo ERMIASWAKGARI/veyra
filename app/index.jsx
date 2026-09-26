@@ -27,12 +27,14 @@ import { usePlayback } from '../src/stores/usePlayback'
 import { APP_CONFIG } from '../src/constants/config'
 import {
   getRecentlyPlayed,
+  getRecentlyAdded,
+  getAllMediaItems,
   getContinueWatchingVideos,
   getFavorites,
   getLastPlaybackState,
   getPlaylists
 } from '../src/database/db'
-import { scanLocalMedia, seedDemoMediaIfEmpty } from '../src/services/mediaScanner/mediaScanner'
+import { scanLocalMedia, scanCustomFolderSAF, seedDemoMediaIfEmpty } from '../src/services/mediaScanner/mediaScanner'
 import { EmptyState } from '../src/components/EmptyState'
 import { formatTime } from '../src/utils/format'
 
@@ -46,7 +48,9 @@ export default function HomeScreen() {
   const [isScanning, setIsScanning] = useState(false)
   const [scanStatus, setScanStatus] = useState('')
   const [recentlyPlayedAudio, setRecentlyPlayedAudio] = useState([])
+  const [recentlyAddedAudio, setRecentlyAddedAudio] = useState([])
   const [continueWatching, setContinueWatching] = useState([])
+  const [allVideos, setAllVideos] = useState([])
   const [favoriteAudio, setFavoriteAudio] = useState([])
   const [playlists, setPlaylists] = useState([])
   const [lastAudioSession, setLastAudioSession] = useState(null)
@@ -54,16 +58,20 @@ export default function HomeScreen() {
 
   const loadDashboardData = useCallback(async () => {
     try {
-      const [recentAudio, watching, favs, pls, lastAudio] = await Promise.all([
+      const [recentAudio, addedAudio, watching, vids, favs, pls, lastAudio] = await Promise.all([
         getRecentlyPlayed('audio', 8),
+        getRecentlyAdded('audio', 10),
         getContinueWatchingVideos(4),
+        getAllMediaItems({ type: 'video', limit: 6 }),
         getFavorites('audio'),
         getPlaylists(),
         getLastPlaybackState(0)
       ])
 
       setRecentlyPlayedAudio(recentAudio)
+      setRecentlyAddedAudio(addedAudio)
       setContinueWatching(watching)
+      setAllVideos(vids)
       setFavoriteAudio(favs.slice(0, 6))
       setPlaylists(pls.slice(0, 4))
       setLastAudioSession(lastAudio)
@@ -75,7 +83,7 @@ export default function HomeScreen() {
   }, [])
 
   useEffect(() => {
-    // Initial load and seed demo media if library is completely empty
+    // Initial load and guarantee demo tracks if database is empty
     seedDemoMediaIfEmpty().then(() => {
       loadDashboardData()
     })
@@ -97,6 +105,22 @@ export default function HomeScreen() {
     }
   }
 
+  const handlePickFolder = async () => {
+    try {
+      setIsScanning(true)
+      setScanStatus('Opening folder picker...')
+      await scanCustomFolderSAF({
+        onProgress: ({ status }) => setScanStatus(status)
+      })
+      await loadDashboardData()
+    } catch (err) {
+      console.warn('Folder scan error:', err)
+    } finally {
+      setIsScanning(false)
+      setScanStatus('')
+    }
+  }
+
   const handleRefresh = async () => {
     setRefreshing(true)
     await loadDashboardData()
@@ -106,10 +130,14 @@ export default function HomeScreen() {
   const isEmptyLibrary =
     hasLoadedInitial &&
     recentlyPlayedAudio.length === 0 &&
-    continueWatching.length === 0 &&
+    recentlyAddedAudio.length === 0 &&
+    allVideos.length === 0 &&
     favoriteAudio.length === 0 &&
     playlists.length === 0 &&
     !lastAudioSession
+
+  const tracksToDisplay = recentlyPlayedAudio.length > 0 ? recentlyPlayedAudio : recentlyAddedAudio
+  const musicSectionTitle = recentlyPlayedAudio.length > 0 ? 'Recently Played' : 'Featured Music'
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background, paddingTop: insets.top }]}>
@@ -178,7 +206,9 @@ export default function HomeScreen() {
             <View style={[styles.tileIconCircle, { backgroundColor: theme.colors.accentSubtle }]}>
               <Music2 size={20} color={theme.colors.accent} />
             </View>
-            <Text style={[styles.tileLabel, { color: theme.colors.textPrimary }]}>Music</Text>
+            <Text style={[styles.tileLabel, { color: theme.colors.textPrimary }]}>
+              Music {recentlyAddedAudio.length > 0 ? `(${recentlyAddedAudio.length})` : ''}
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -189,7 +219,9 @@ export default function HomeScreen() {
             <View style={[styles.tileIconCircle, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
               <VideoIcon size={20} color={theme.colors.success} />
             </View>
-            <Text style={[styles.tileLabel, { color: theme.colors.textPrimary }]}>Videos</Text>
+            <Text style={[styles.tileLabel, { color: theme.colors.textPrimary }]}>
+              Videos {allVideos.length > 0 ? `(${allVideos.length})` : ''}
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -208,19 +240,21 @@ export default function HomeScreen() {
         {isEmptyLibrary ? (
           <EmptyState
             title="No media found yet."
-            message="Scan your device to build your library."
+            message="Scan your device to build your library, or pick a specific folder containing music."
             actionLabel="Scan Device"
             onAction={handleScan}
+            secondaryActionLabel="Pick Folder"
+            onSecondaryAction={handlePickFolder}
             loading={isScanning}
           />
         ) : (
           <>
-            {/* Continue Watching (Section 25) */}
-            {continueWatching.length > 0 && (
+            {/* Continue Watching / Videos Preview */}
+            {(continueWatching.length > 0 || allVideos.length > 0) && (
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
                   <Text style={[styles.sectionTitle, { color: theme.colors.textPrimary }]}>
-                    Continue Watching
+                    {continueWatching.length > 0 ? 'Continue Watching' : 'Videos'}
                   </Text>
                   <TouchableOpacity onPress={() => router.push('/videos')}>
                     <ChevronRight size={18} color={theme.colors.textMuted} />
@@ -228,7 +262,7 @@ export default function HomeScreen() {
                 </View>
 
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalList}>
-                  {continueWatching.map((item) => (
+                  {(continueWatching.length > 0 ? continueWatching : allVideos).map((item) => (
                     <TouchableOpacity
                       key={item.id}
                       style={[styles.watchCard, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.md }]}
@@ -246,7 +280,9 @@ export default function HomeScreen() {
                         )}
                         <View style={[styles.resumeBadge, { backgroundColor: 'rgba(0,0,0,0.7)' }]}>
                           <Text style={styles.resumeText}>
-                            {formatTime(item.position)} / {formatTime(item.duration)}
+                            {item.position > 0
+                              ? `${formatTime(item.position)} / ${formatTime(item.duration)}`
+                              : formatTime(item.duration)}
                           </Text>
                         </View>
                       </View>
@@ -255,7 +291,7 @@ export default function HomeScreen() {
                           {item.title}
                         </Text>
                         <Text style={[styles.watchSub, { color: theme.colors.textSecondary }]}>
-                          Resume playback
+                          {item.position > 0 ? 'Resume playback' : 'Play video'}
                         </Text>
                       </View>
                     </TouchableOpacity>
@@ -264,12 +300,12 @@ export default function HomeScreen() {
               </View>
             )}
 
-            {/* Recently Played Music */}
-            {recentlyPlayedAudio.length > 0 && (
+            {/* Music Tracks (Recently Played or Recently Added) */}
+            {tracksToDisplay.length > 0 && (
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
                   <Text style={[styles.sectionTitle, { color: theme.colors.textPrimary }]}>
-                    Recently Played
+                    {musicSectionTitle}
                   </Text>
                   <TouchableOpacity onPress={() => router.push('/music')}>
                     <ChevronRight size={18} color={theme.colors.textMuted} />
@@ -277,12 +313,12 @@ export default function HomeScreen() {
                 </View>
 
                 <View style={styles.trackList}>
-                  {recentlyPlayedAudio.map((track) => (
+                  {tracksToDisplay.map((track, idx) => (
                     <TouchableOpacity
                       key={track.id}
                       style={[styles.recentRow, { borderBottomColor: theme.colors.borderSubtle }]}
                       activeOpacity={0.7}
-                      onPress={() => playMedia(track, recentlyPlayedAudio, recentlyPlayedAudio.indexOf(track))}
+                      onPress={() => playMedia(track, tracksToDisplay, idx)}
                     >
                       <View style={[styles.trackThumb, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.sm }]}>
                         {track.artworkUri ? (

@@ -7,7 +7,8 @@ import {
   TouchableOpacity,
   RefreshControl,
   ScrollView,
-  Modal
+  Modal,
+  ActivityIndicator
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -20,7 +21,8 @@ import {
   Disc,
   Folder,
   Heart,
-  Check
+  Check,
+  FolderSync
 } from 'lucide-react-native'
 import { useTheme } from '../../src/stores/useTheme'
 import { usePlayback } from '../../src/stores/usePlayback'
@@ -33,6 +35,7 @@ import {
   toggleFavorite,
   isFavorite
 } from '../../src/database/db'
+import { scanLocalMedia, scanCustomFolderSAF } from '../../src/services/mediaScanner/mediaScanner'
 import { TrackItem } from '../../src/components/TrackItem'
 import { PlaylistSelectModal } from '../../src/components/PlaylistSelectModal'
 import { EmptyState } from '../../src/components/EmptyState'
@@ -73,6 +76,8 @@ export default function MusicScreen() {
 
   // Playlist selector modal
   const [selectedTrackForPlaylist, setSelectedTrackForPlaylist] = useState(null)
+  const [isScanning, setIsScanning] = useState(false)
+  const [scanStatus, setScanStatus] = useState('')
 
   const loadData = useCallback(async () => {
     try {
@@ -128,6 +133,40 @@ export default function MusicScreen() {
     playMedia(items[0], items, 0)
   }
 
+  const handleScanAudio = async () => {
+    try {
+      setIsScanning(true)
+      setScanStatus('Scanning audio storage...')
+      await scanLocalMedia({
+        scanAudio: true,
+        scanVideo: false,
+        onProgress: ({ status }) => setScanStatus(status)
+      })
+      await loadData()
+    } catch (err) {
+      console.warn('Audio scan error:', err)
+    } finally {
+      setIsScanning(false)
+      setScanStatus('')
+    }
+  }
+
+  const handlePickFolder = async () => {
+    try {
+      setIsScanning(true)
+      setScanStatus('Opening folder picker...')
+      await scanCustomFolderSAF({
+        onProgress: ({ status }) => setScanStatus(status)
+      })
+      await loadData()
+    } catch (err) {
+      console.warn('Folder import error:', err)
+    } finally {
+      setIsScanning(false)
+      setScanStatus('')
+    }
+  }
+
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background, paddingTop: insets.top }]}>
       {/* Top Header */}
@@ -141,17 +180,31 @@ export default function MusicScreen() {
           Music Library
         </Text>
 
-        {activeTab === 'songs' && (
+        <View style={styles.headerActions}>
           <TouchableOpacity
-            style={[styles.sortButton, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full }]}
-            onPress={() => setSortModalVisible(true)}
+            style={[styles.iconButton, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full }]}
+            onPress={handleScanAudio}
+            disabled={isScanning}
           >
-            <ArrowUpDown size={16} color={theme.colors.textPrimary} />
-            <Text style={[styles.sortButtonText, { color: theme.colors.textPrimary }]}>
-              {SORT_OPTIONS.find((s) => s.id === sortBy)?.label}
-            </Text>
+            {isScanning ? (
+              <ActivityIndicator size="small" color={theme.colors.accent} />
+            ) : (
+              <FolderSync size={16} color={theme.colors.textPrimary} />
+            )}
           </TouchableOpacity>
-        )}
+
+          {activeTab === 'songs' && (
+            <TouchableOpacity
+              style={[styles.sortButton, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full }]}
+              onPress={() => setSortModalVisible(true)}
+            >
+              <ArrowUpDown size={16} color={theme.colors.textPrimary} />
+              <Text style={[styles.sortButtonText, { color: theme.colors.textPrimary }]}>
+                {SORT_OPTIONS.find((s) => s.id === sortBy)?.label}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       {/* Tabs */}
@@ -234,8 +287,13 @@ export default function MusicScreen() {
               message={
                 activeTab === 'favorites'
                   ? 'Tap the heart icon on any song to save it here.'
-                  : 'Scan your device to discover audio tracks.'
+                  : (scanStatus || 'Scan your device to discover audio tracks, or pick a music folder.')
               }
+              actionLabel="Scan Audio"
+              onAction={activeTab === 'songs' ? handleScanAudio : undefined}
+              secondaryActionLabel="Pick Folder"
+              onSecondaryAction={activeTab === 'songs' ? handlePickFolder : undefined}
+              loading={isScanning}
             />
           }
         />
@@ -351,6 +409,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 14,
     borderBottomWidth: 1
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  iconButton: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center'
   },
   title: {
     letterSpacing: -0.3
