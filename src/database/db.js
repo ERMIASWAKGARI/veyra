@@ -1,14 +1,17 @@
-import * as SQLite from 'expo-sqlite'
 import { Platform } from 'react-native'
 import { TABLE_STATEMENTS } from './schema'
 import { APP_CONFIG } from '../constants/config'
+import * as webDb from './db.web'
 
 let dbInstance = null
 
 export async function getDatabase() {
+  if (Platform.OS === 'web') {
+    return webDb.getDatabase()
+  }
   if (!dbInstance) {
-    const dbName = Platform.OS === 'web' ? ':memory:' : APP_CONFIG.database.name
-    dbInstance = await SQLite.openDatabaseAsync(dbName)
+    const SQLite = require('expo-sqlite')
+    dbInstance = await SQLite.openDatabaseAsync(APP_CONFIG.database.name)
     try {
       await dbInstance.execAsync('PRAGMA foreign_keys = ON;')
     } catch {}
@@ -26,6 +29,7 @@ export async function getDatabase() {
 // ----------------- Media Items Repository -----------------
 
 export async function upsertMediaItem(item) {
+  if (Platform.OS === 'web') return webDb.upsertMediaItem(item)
   const db = await getDatabase()
   const sql = `
     INSERT INTO media_items (
@@ -74,6 +78,7 @@ export async function upsertMediaItem(item) {
 
 export async function upsertMediaItemsBatch(items) {
   if (!items || items.length === 0) return
+  if (Platform.OS === 'web') return webDb.upsertMediaItemsBatch(items)
   const db = await getDatabase()
   await db.withTransactionAsync(async () => {
     for (const item of items) {
@@ -93,6 +98,9 @@ export async function getAllMediaItems({
   folder = null,
   genre = null
 } = {}) {
+  if (Platform.OS === 'web') {
+    return webDb.getAllMediaItems({ type, sortBy, order, limit, offset, artist, album, folder, genre })
+  }
   const db = await getDatabase()
   const conditions = ['type = ?']
   const params = [type]
@@ -130,11 +138,13 @@ export async function getAllMediaItems({
 }
 
 export async function getMediaItemById(id) {
+  if (Platform.OS === 'web') return webDb.getMediaItemById(id)
   const db = await getDatabase()
   return await db.getFirstAsync('SELECT * FROM media_items WHERE id = ?', [id])
 }
 
 export async function searchMedia(query, limit = 50) {
+  if (Platform.OS === 'web') return webDb.searchMedia(query, limit)
   if (!query || query.trim().length === 0) return { songs: [], videos: [], artists: [], albums: [] }
   const db = await getDatabase()
   const term = `%${query.trim()}%`
@@ -175,6 +185,7 @@ export async function searchMedia(query, limit = 50) {
 }
 
 export async function getArtistsSummary() {
+  if (Platform.OS === 'web') return webDb.getArtistsSummary()
   const db = await getDatabase()
   return await db.getAllAsync(
     `SELECT artist as name, COUNT(*) as trackCount, COUNT(DISTINCT album) as albumCount
@@ -186,6 +197,7 @@ export async function getArtistsSummary() {
 }
 
 export async function getAlbumsSummary() {
+  if (Platform.OS === 'web') return webDb.getAlbumsSummary()
   const db = await getDatabase()
   return await db.getAllAsync(
     `SELECT album as title, artist, artworkUri, COUNT(*) as trackCount, MAX(year) as year
@@ -197,6 +209,7 @@ export async function getAlbumsSummary() {
 }
 
 export async function getGenresSummary() {
+  if (Platform.OS === 'web') return webDb.getGenresSummary()
   const db = await getDatabase()
   return await db.getAllAsync(
     `SELECT genre, COUNT(*) as trackCount
@@ -208,6 +221,7 @@ export async function getGenresSummary() {
 }
 
 export async function getFoldersSummary(type = 'audio') {
+  if (Platform.OS === 'web') return webDb.getFoldersSummary(type)
   const db = await getDatabase()
   return await db.getAllAsync(
     `SELECT folder, COUNT(*) as mediaCount
@@ -220,6 +234,7 @@ export async function getFoldersSummary(type = 'audio') {
 }
 
 export async function getRecentlyAdded(type = 'audio', limit = 20) {
+  if (Platform.OS === 'web') return webDb.getRecentlyAdded(type, limit)
   const db = await getDatabase()
   return await db.getAllAsync(
     `SELECT * FROM media_items
@@ -233,6 +248,7 @@ export async function getRecentlyAdded(type = 'audio', limit = 20) {
 // ----------------- Playlists Repository -----------------
 
 export async function createPlaylist(name) {
+  if (Platform.OS === 'web') return webDb.createPlaylist(name)
   const db = await getDatabase()
   const id = `pl_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
   const now = Date.now()
@@ -244,6 +260,7 @@ export async function createPlaylist(name) {
 }
 
 export async function renamePlaylist(id, newName) {
+  if (Platform.OS === 'web') return webDb.renamePlaylist(id, newName)
   const db = await getDatabase()
   const now = Date.now()
   await db.runAsync(
@@ -253,17 +270,20 @@ export async function renamePlaylist(id, newName) {
 }
 
 export async function deletePlaylist(id) {
+  if (Platform.OS === 'web') return webDb.deletePlaylist(id)
   const db = await getDatabase()
   await db.runAsync('DELETE FROM playlists WHERE id = ?', [id])
 }
 
 export async function getPlaylists() {
+  if (Platform.OS === 'web') return webDb.getPlaylists()
   const db = await getDatabase()
   return await db.getAllAsync('SELECT * FROM playlists ORDER BY name COLLATE NOCASE ASC')
 }
 
 export async function addItemsToPlaylist(playlistId, mediaIds) {
   if (!mediaIds || mediaIds.length === 0) return
+  if (Platform.OS === 'web') return webDb.addItemsToPlaylist(playlistId, mediaIds)
   const db = await getDatabase()
   const now = Date.now()
 
@@ -294,6 +314,7 @@ export async function addItemsToPlaylist(playlistId, mediaIds) {
 }
 
 export async function removeItemFromPlaylist(playlistId, mediaId) {
+  if (Platform.OS === 'web') return webDb.removeItemFromPlaylist(playlistId, mediaId)
   const db = await getDatabase()
   const now = Date.now()
   await db.withTransactionAsync(async () => {
@@ -310,6 +331,7 @@ export async function removeItemFromPlaylist(playlistId, mediaId) {
 }
 
 export async function getPlaylistItems(playlistId) {
+  if (Platform.OS === 'web') return webDb.getPlaylistItems(playlistId)
   const db = await getDatabase()
   return await db.getAllAsync(
     `SELECT m.*, pi.sortOrder, pi.id as playlistItemId
@@ -324,6 +346,7 @@ export async function getPlaylistItems(playlistId) {
 // ----------------- Favorites Repository -----------------
 
 export async function toggleFavorite(mediaId, type = 'audio') {
+  if (Platform.OS === 'web') return webDb.toggleFavorite(mediaId, type)
   const db = await getDatabase()
   const existing = await db.getFirstAsync('SELECT * FROM favorites WHERE mediaId = ?', [mediaId])
   if (existing) {
@@ -339,12 +362,14 @@ export async function toggleFavorite(mediaId, type = 'audio') {
 }
 
 export async function isFavorite(mediaId) {
+  if (Platform.OS === 'web') return webDb.isFavorite(mediaId)
   const db = await getDatabase()
   const existing = await db.getFirstAsync('SELECT mediaId FROM favorites WHERE mediaId = ?', [mediaId])
   return !!existing
 }
 
 export async function getFavorites(type = 'audio') {
+  if (Platform.OS === 'web') return webDb.getFavorites(type)
   const db = await getDatabase()
   return await db.getAllAsync(
     `SELECT m.*, f.addedAt as favoriteAddedAt
@@ -359,6 +384,7 @@ export async function getFavorites(type = 'audio') {
 // ----------------- Play History & Playback State -----------------
 
 export async function recordPlayHistory(mediaId, position = 0, completionPercentage = 0.0) {
+  if (Platform.OS === 'web') return webDb.recordPlayHistory(mediaId, position, completionPercentage)
   const db = await getDatabase()
   const id = `hist_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
   await db.runAsync(
@@ -368,6 +394,7 @@ export async function recordPlayHistory(mediaId, position = 0, completionPercent
 }
 
 export async function getRecentlyPlayed(type = 'audio', limit = 20) {
+  if (Platform.OS === 'web') return webDb.getRecentlyPlayed(type, limit)
   const db = await getDatabase()
   return await db.getAllAsync(
     `SELECT m.*, MAX(h.playedAt) as lastPlayedAt, h.position as lastPosition, h.completionPercentage
@@ -382,6 +409,7 @@ export async function getRecentlyPlayed(type = 'audio', limit = 20) {
 }
 
 export async function savePlaybackState({ mediaId, position, duration, speed = 1.0, isVideo = 0 }) {
+  if (Platform.OS === 'web') return webDb.savePlaybackState({ mediaId, position, duration, speed, isVideo })
   const db = await getDatabase()
   const now = Date.now()
   await db.runAsync(
@@ -398,11 +426,13 @@ export async function savePlaybackState({ mediaId, position, duration, speed = 1
 }
 
 export async function getPlaybackState(mediaId) {
+  if (Platform.OS === 'web') return webDb.getPlaybackState(mediaId)
   const db = await getDatabase()
   return await db.getFirstAsync('SELECT * FROM playback_state WHERE mediaId = ?', [mediaId])
 }
 
 export async function getLastPlaybackState(isVideo = 0) {
+  if (Platform.OS === 'web') return webDb.getLastPlaybackState(isVideo)
   const db = await getDatabase()
   return await db.getFirstAsync(
     `SELECT ps.*, m.title, m.artist, m.album, m.artworkUri, m.uri, m.type
@@ -416,6 +446,7 @@ export async function getLastPlaybackState(isVideo = 0) {
 }
 
 export async function getContinueWatchingVideos(limit = 10) {
+  if (Platform.OS === 'web') return webDb.getContinueWatchingVideos(limit)
   const db = await getDatabase()
   return await db.getAllAsync(
     `SELECT m.*, ps.position, ps.duration, ps.updatedAt as lastWatchedAt
@@ -431,6 +462,7 @@ export async function getContinueWatchingVideos(limit = 10) {
 // ----------------- Settings Repository -----------------
 
 export async function getSetting(key, defaultValue = null) {
+  if (Platform.OS === 'web') return webDb.getSetting(key, defaultValue)
   const db = await getDatabase()
   const row = await db.getFirstAsync('SELECT value FROM settings WHERE key = ?', [key])
   if (!row) return defaultValue
@@ -442,6 +474,7 @@ export async function getSetting(key, defaultValue = null) {
 }
 
 export async function setSetting(key, value) {
+  if (Platform.OS === 'web') return webDb.setSetting(key, value)
   const db = await getDatabase()
   const serialized = typeof value === 'string' ? value : JSON.stringify(value)
   await db.runAsync(
@@ -452,6 +485,7 @@ export async function setSetting(key, value) {
 }
 
 export async function clearAllLibraryData() {
+  if (Platform.OS === 'web') return webDb.clearAllLibraryData()
   const db = await getDatabase()
   await db.withTransactionAsync(async () => {
     await db.runAsync('DELETE FROM playlist_items')

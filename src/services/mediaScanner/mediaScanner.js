@@ -1,13 +1,20 @@
 import { Platform } from 'react-native'
+import { requireOptionalNativeModule } from 'expo-modules-core'
 import { upsertMediaItemsBatch, getAllMediaItems, setSetting, getSetting } from '../../database/db'
 import { APP_CONFIG } from '../../constants/config'
 
 function getMediaLibrary() {
   if (Platform.OS === 'web') return null
   try {
+    const nativeModule =
+      requireOptionalNativeModule('ExpoMediaLibraryNext') ||
+      requireOptionalNativeModule('ExpoMediaLibrary')
+
+    if (!nativeModule) {
+      return null
+    }
     return require('expo-media-library')
   } catch (e) {
-    console.warn('Native expo-media-library module not loaded in this runtime (e.g. Expo Go):', e?.message)
     return null
   }
 }
@@ -48,7 +55,7 @@ export async function scanLocalMedia({
 } = {}) {
   const MediaLibrary = getMediaLibrary()
 
-  // In runtimes where native MediaStore scanning is unavailable (e.g. Expo Go sandbox),
+  // In runtimes where native MediaStore scanning is unavailable (e.g. Expo Go sandbox or web),
   // seed demonstration media so that library and playback can be tested immediately
   if (!MediaLibrary || !MediaLibrary.getPermissionsAsync) {
     onProgress({ progress: 0.5, status: 'Setting up demo library...' })
