@@ -25,7 +25,9 @@
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
         "android.permission.POST_NOTIFICATIONS",
-        "android.permission.WAKE_LOCK"
+        "android.permission.WAKE_LOCK",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
       ]
     },
     "web": {
@@ -40,9 +42,19 @@
           "photosPermission": "Grant VEYRA access to media files.",
           "savePhotosPermission": "Grant VEYRA access to media files.",
           "isAccessMediaLocationEnabled": false,
-          "granularPermissions": ["audio", "video"]
+          "granularPermissions": [
+            "audio",
+            "video"
+          ]
         }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "5f77713e-8366-480b-89c9-b7ec8a6265d7"
+      }
+    },
+    "owner": "ermiaswakgari"
   }
 }
