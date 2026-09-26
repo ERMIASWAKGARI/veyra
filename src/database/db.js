@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite'
+import { Platform } from 'react-native'
 import { TABLE_STATEMENTS } from './schema'
 import { APP_CONFIG } from '../constants/config'
 
@@ -6,7 +7,8 @@ let dbInstance = null
 
 export async function getDatabase() {
   if (!dbInstance) {
-    dbInstance = await SQLite.openDatabaseAsync(APP_CONFIG.database.name)
+    const dbName = Platform.OS === 'web' ? ':memory:' : APP_CONFIG.database.name
+    dbInstance = await SQLite.openDatabaseAsync(dbName)
     try {
       await dbInstance.execAsync('PRAGMA foreign_keys = ON;')
     } catch {}
