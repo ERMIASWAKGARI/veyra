@@ -7,7 +7,6 @@
     "icon": "./assets/branding/veyra-icon-1024.png",
     "scheme": "veyra",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true
     },

@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
@@ -239,7 +240,9 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
             val mediaItems = ArrayList<MediaItem>(items.size())
             for (i in 0 until items.size()) {
                 val map = items.getMap(i)
-                mediaItems.add(buildMediaItem(map))
+                if (map != null) {
+                    mediaItems.add(buildMediaItem(map))
+                }
             }
             controller.setMediaItems(mediaItems, startIndex, C.TIME_UNSET)
             controller.prepare()
