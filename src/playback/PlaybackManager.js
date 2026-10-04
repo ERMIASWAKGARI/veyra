@@ -3,7 +3,8 @@ import {
   savePlaybackState,
   recordPlayHistory,
   getLastPlaybackState,
-  getMediaItemById
+  getMediaItemById,
+  updateMediaDuration
 } from '../database/db'
 import { APP_CONFIG } from '../constants/config'
 
@@ -46,6 +47,14 @@ class PlaybackManagerSingleton {
 
   _handleEngineEvent(event, data) {
     if (event === 'onPlaybackStateChanged') {
+      const activeMedia = data.currentMedia || this.currentState.currentMedia
+      if (data.duration > 0 && activeMedia?.id) {
+        if (!activeMedia.duration || activeMedia.duration === 0) {
+          activeMedia.duration = data.duration
+          updateMediaDuration(activeMedia.id, data.duration).catch(() => {})
+        }
+      }
+
       this.currentState = {
         ...this.currentState,
         isPlaying: data.isPlaying,
@@ -55,7 +64,7 @@ class PlaybackManagerSingleton {
         speed: data.speed,
         shuffleEnabled: data.shuffleEnabled,
         repeatMode: data.repeatMode,
-        currentMedia: data.currentMedia || this.currentState.currentMedia
+        currentMedia: activeMedia
       }
       this._notifyListeners()
     } else if (event === 'onMediaChanged') {

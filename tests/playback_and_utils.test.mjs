@@ -89,3 +89,27 @@ describe('Queue Manipulation & Deterministic Shuffle', () => {
     assert.equal(isCompleted2, true)
   })
 })
+
+describe('Media File Parsing & Extensions', () => {
+  const AUDIO_EXTENSIONS = /\.(mp3|m4a|aac|flac|wav|ogg|opus|wma|aiff)$/i
+  const VIDEO_EXTENSIONS = /\.(mp4|mkv|webm|avi|mov|flv|3gp|m4v|ts)$/i
+
+  test('recognizes standard audio and video extensions correctly', () => {
+    assert.equal(AUDIO_EXTENSIONS.test('track.mp3'), true)
+    assert.equal(AUDIO_EXTENSIONS.test('audio.M4A'), true)
+    assert.equal(AUDIO_EXTENSIONS.test('voice.opus'), true)
+    assert.equal(AUDIO_EXTENSIONS.test('video.mp4'), false)
+
+    assert.equal(VIDEO_EXTENSIONS.test('movie.mp4'), true)
+    assert.equal(VIDEO_EXTENSIONS.test('clip.MKV'), true)
+    assert.equal(VIDEO_EXTENSIONS.test('stream.webm'), true)
+    assert.equal(VIDEO_EXTENSIONS.test('song.flac'), false)
+  })
+
+  test('cleans and formats titles from filenames', () => {
+    const rawFilename = '01 - Artist - Song Title (Official).mp3'
+    const cleanTitle = rawFilename.replace(/\.[^.]+$/, '').replace(/^[0-9]+[.\s-_]+/, '')
+    assert.equal(cleanTitle, 'Artist - Song Title (Official)')
+  })
+})
+

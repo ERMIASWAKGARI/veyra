@@ -6,7 +6,9 @@ import {
   FlatList,
   TouchableOpacity,
   RefreshControl,
-  ScrollView
+  ScrollView,
+  ActivityIndicator,
+  Platform
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -15,7 +17,10 @@ import {
   Folder,
   Heart,
   Clock,
-  ArrowUpDown
+  ArrowUpDown,
+  FilePlus,
+  FolderPlus,
+  FolderSync
 } from 'lucide-react-native'
 import { useTheme } from '../../src/stores/useTheme'
 import { usePlayback } from '../../src/stores/usePlayback'
@@ -27,6 +32,7 @@ import {
   toggleFavorite,
   getPlaybackState
 } from '../../src/database/db'
+import { scanLocalMedia, pickFilesAndImport, scanCustomFolderSAF } from '../../src/services/mediaScanner/mediaScanner'
 import { VideoCard } from '../../src/components/VideoCard'
 import { EmptyState } from '../../src/components/EmptyState'
 
@@ -49,6 +55,68 @@ export default function VideosScreen() {
   const [favoritesMap, setFavoritesMap] = useState({})
   const [resumePositions, setResumePositions] = useState({})
   const [refreshing, setRefreshing] = useState(false)
+  const [isScanning, setIsScanning] = useState(false)
+  const [scanStatus, setScanStatus] = useState('')
+
+  const handleScanVideos = async () => {
+    try {
+      setIsScanning(true)
+      setScanStatus('Scanning device videos...')
+      const res = await scanLocalMedia({
+        scanAudio: false,
+        scanVideo: true,
+        onProgress: ({ status }) => setScanStatus(status)
+      })
+      await loadData()
+      if (res && res.totalScanned > 0) {
+        setScanStatus(`Found ${res.totalScanned} video(s)`)
+        setTimeout(() => setScanStatus(''), 2500)
+      }
+    } catch (err) {
+      console.warn('Video scan error:', err)
+    } finally {
+      setIsScanning(false)
+    }
+  }
+
+  const handlePickFiles = async () => {
+    try {
+      setIsScanning(true)
+      setScanStatus('Opening file picker...')
+      const res = await pickFilesAndImport({
+        mediaType: 'video',
+        onProgress: ({ status }) => setScanStatus(status)
+      })
+      await loadData()
+      if (res && res.totalScanned > 0) {
+        setScanStatus(`Imported ${res.totalScanned} video(s)`)
+        setTimeout(() => setScanStatus(''), 2500)
+      }
+    } catch (err) {
+      console.warn('Pick files error:', err)
+    } finally {
+      setIsScanning(false)
+    }
+  }
+
+  const handlePickFolder = async () => {
+    try {
+      setIsScanning(true)
+      setScanStatus('Opening folder picker...')
+      const res = await scanCustomFolderSAF({
+        onProgress: ({ status }) => setScanStatus(status)
+      })
+      await loadData()
+      if (res && res.newOrUpdated > 0) {
+        setScanStatus(`Added ${res.newOrUpdated} video(s)`)
+        setTimeout(() => setScanStatus(''), 2500)
+      }
+    } catch (err) {
+      console.warn('Folder import error:', err)
+    } finally {
+      setIsScanning(false)
+    }
+  }
 
   const loadData = useCallback(async () => {
     try {
@@ -119,6 +187,44 @@ export default function VideosScreen() {
         >
           Video Library
         </Text>
+
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={[
+              styles.iconButton,
+              { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full, marginRight: spacing.xs }
+            ]}
+            onPress={handlePickFiles}
+            disabled={isScanning}
+          >
+            <FilePlus size={16} color={theme.colors.accent} />
+          </TouchableOpacity>
+
+          {Platform.OS === 'android' && (
+            <TouchableOpacity
+              style={[
+                styles.iconButton,
+                { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full, marginRight: spacing.xs }
+              ]}
+              onPress={handlePickFolder}
+              disabled={isScanning}
+            >
+              <FolderPlus size={16} color={theme.colors.accent} />
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity
+            style={[styles.iconButton, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full }]}
+            onPress={handleScanVideos}
+            disabled={isScanning}
+          >
+            {isScanning ? (
+              <ActivityIndicator size="small" color={theme.colors.accent} />
+            ) : (
+              <FolderSync size={16} color={theme.colors.textPrimary} />
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Tabs */}
@@ -204,8 +310,16 @@ export default function VideosScreen() {
               message={
                 activeTab === 'favorites'
                   ? 'Favorite videos by tapping the heart icon.'
-                  : 'Scan your device to index videos.'
+                  : (scanStatus || 'Scan your device to index videos, or pick video files directly.')
               }
+              actionLabel={activeTab === 'all' ? 'Scan Videos' : undefined}
+              onAction={activeTab === 'all' ? handleScanVideos : undefined}
+              secondaryActionLabel={activeTab === 'all' ? 'Pick Files' : undefined}
+              onSecondaryAction={activeTab === 'all' ? handlePickFiles : undefined}
+              tertiaryActionLabel={activeTab === 'all' && Platform.OS === 'android' ? 'Pick Folder' : undefined}
+              onTertiaryAction={activeTab === 'all' && Platform.OS === 'android' ? handlePickFolder : undefined}
+              tip={activeTab === 'all' ? "Tip: If Android blocks a folder (e.g. Downloads) for privacy, use 'Pick Files' to select video files directly." : undefined}
+              loading={isScanning}
             />
           }
         />
@@ -225,6 +339,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 14,
     borderBottomWidth: 1
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  iconButton: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center'
   },
   title: {
     letterSpacing: -0.3

@@ -113,3 +113,7 @@ export async function scanCustomFolderSAF() {
   return { totalScanned: 0, newOrUpdated: 0 }
 }
 
+export async function pickFilesAndImport() {
+  return { totalScanned: 0, newOrUpdated: 0 }
+}
+

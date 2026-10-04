@@ -24,7 +24,8 @@ import {
   Heart,
   Check,
   FolderSync,
-  FolderPlus
+  FolderPlus,
+  FilePlus
 } from 'lucide-react-native'
 import { useTheme } from '../../src/stores/useTheme'
 import { usePlayback } from '../../src/stores/usePlayback'
@@ -37,7 +38,7 @@ import {
   toggleFavorite,
   isFavorite
 } from '../../src/database/db'
-import { scanLocalMedia, scanCustomFolderSAF } from '../../src/services/mediaScanner/mediaScanner'
+import { scanLocalMedia, scanCustomFolderSAF, pickFilesAndImport } from '../../src/services/mediaScanner/mediaScanner'
 import { TrackItem } from '../../src/components/TrackItem'
 import { PlaylistSelectModal } from '../../src/components/PlaylistSelectModal'
 import { EmptyState } from '../../src/components/EmptyState'
@@ -153,19 +154,42 @@ export default function MusicScreen() {
     }
   }
 
+  const handlePickFiles = async () => {
+    try {
+      setIsScanning(true)
+      setScanStatus('Opening file picker...')
+      const res = await pickFilesAndImport({
+        mediaType: 'audio',
+        onProgress: ({ status }) => setScanStatus(status)
+      })
+      await loadData()
+      if (res && res.totalScanned > 0) {
+        setScanStatus(`Imported ${res.totalScanned} track(s)`)
+        setTimeout(() => setScanStatus(''), 2500)
+      }
+    } catch (err) {
+      console.warn('Pick files error:', err)
+    } finally {
+      setIsScanning(false)
+    }
+  }
+
   const handlePickFolder = async () => {
     try {
       setIsScanning(true)
       setScanStatus('Opening folder picker...')
-      await scanCustomFolderSAF({
+      const res = await scanCustomFolderSAF({
         onProgress: ({ status }) => setScanStatus(status)
       })
       await loadData()
+      if (res && res.newOrUpdated > 0) {
+        setScanStatus(`Added ${res.newOrUpdated} track(s)`)
+        setTimeout(() => setScanStatus(''), 2500)
+      }
     } catch (err) {
       console.warn('Folder import error:', err)
     } finally {
       setIsScanning(false)
-      setScanStatus('')
     }
   }
 
@@ -183,6 +207,17 @@ export default function MusicScreen() {
         </Text>
 
         <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={[
+              styles.iconButton,
+              { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full, marginRight: spacing.xs }
+            ]}
+            onPress={handlePickFiles}
+            disabled={isScanning}
+          >
+            <FilePlus size={16} color={theme.colors.accent} />
+          </TouchableOpacity>
+
           {Platform.OS === 'android' && (
             <TouchableOpacity
               style={[
@@ -302,12 +337,15 @@ export default function MusicScreen() {
               message={
                 activeTab === 'favorites'
                   ? 'Tap the heart icon on any song to save it here.'
-                  : (scanStatus || 'Scan your device to discover audio tracks, or pick a music folder.')
+                  : (scanStatus || 'Scan your device to discover audio tracks, or pick files/folders directly.')
               }
-              actionLabel="Scan Audio"
+              actionLabel={activeTab === 'songs' ? 'Scan Audio' : undefined}
               onAction={activeTab === 'songs' ? handleScanAudio : undefined}
-              secondaryActionLabel="Pick Folder"
-              onSecondaryAction={activeTab === 'songs' ? handlePickFolder : undefined}
+              secondaryActionLabel={activeTab === 'songs' ? 'Pick Files' : undefined}
+              onSecondaryAction={activeTab === 'songs' ? handlePickFiles : undefined}
+              tertiaryActionLabel={activeTab === 'songs' && Platform.OS === 'android' ? 'Pick Folder' : undefined}
+              onTertiaryAction={activeTab === 'songs' && Platform.OS === 'android' ? handlePickFolder : undefined}
+              tip={activeTab === 'songs' ? "Tip: If Android blocks a folder (e.g. Downloads) for privacy, use 'Pick Files' to select audio files directly." : undefined}
               loading={isScanning}
             />
           }

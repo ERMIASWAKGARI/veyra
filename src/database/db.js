@@ -95,6 +95,20 @@ export async function upsertMediaItemsBatch(items) {
   }
 }
 
+export async function updateMediaDuration(id, duration) {
+  if (Platform.OS === 'web') return webDb.updateMediaDuration(id, duration)
+  if (!id || !duration || duration <= 0) return
+  try {
+    const db = await getDatabase()
+    await db.runAsync('UPDATE media_items SET duration = ? WHERE id = ? AND (duration IS NULL OR duration = 0)', [
+      Math.round(duration),
+      String(id)
+    ])
+  } catch (e) {
+    console.warn('Error updating media duration:', e)
+  }
+}
+
 export async function getAllMediaItems({
   type = 'audio',
   sortBy = 'title',

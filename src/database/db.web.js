@@ -289,6 +289,14 @@ export async function getRecentlyPlayed(type = 'audio', limit = 20) {
   return items
 }
 
+export async function updateMediaDuration(id, duration) {
+  if (!id || !duration || duration <= 0) return
+  const m = webStorage.media.get(id)
+  if (m && (!m.duration || m.duration === 0)) {
+    m.duration = Math.round(duration)
+  }
+}
+
 export async function savePlaybackState({ mediaId, position, duration, speed = 1.0, isVideo = 0 }) {
   webStorage.playbackState.set(mediaId, {
     mediaId,

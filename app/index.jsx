@@ -19,6 +19,7 @@ import {
   ListMusic,
   FolderSync,
   FolderPlus,
+  FilePlus,
   Play,
   Clock,
   ChevronRight
@@ -37,7 +38,7 @@ import {
   getLastPlaybackState,
   getPlaylists
 } from '../src/database/db'
-import { scanLocalMedia, scanCustomFolderSAF, seedDemoMediaIfEmpty } from '../src/services/mediaScanner/mediaScanner'
+import { scanLocalMedia, scanCustomFolderSAF, pickFilesAndImport, seedDemoMediaIfEmpty } from '../src/services/mediaScanner/mediaScanner'
 import { EmptyState } from '../src/components/EmptyState'
 import { formatTime } from '../src/utils/format'
 
@@ -99,19 +100,41 @@ export default function HomeScreen() {
   const handleScan = async () => {
     try {
       setIsScanning(true)
-      setScanStatus('Scanning device storage...')
+      setScanStatus('Scanning device media...')
       const result = await scanLocalMedia({
         onProgress: ({ status }) => setScanStatus(status)
       })
       await loadDashboardData()
-      if (result && result.permissionDenied && Platform.OS === 'android') {
-        await handlePickFolder()
+      if (result && result.permissionDenied) {
+        setScanStatus('Permission denied. Use "Files" or "Folder" to import.')
+        setTimeout(() => setScanStatus(''), 4000)
+      } else if (result && result.totalScanned > 0) {
+        setScanStatus(`Found ${result.totalScanned} media items`)
+        setTimeout(() => setScanStatus(''), 2500)
       }
     } catch (err) {
       console.warn('Scan error:', err)
     } finally {
       setIsScanning(false)
-      setScanStatus('')
+    }
+  }
+
+  const handlePickFiles = async () => {
+    try {
+      setIsScanning(true)
+      setScanStatus('Opening file picker...')
+      const result = await pickFilesAndImport({
+        onProgress: ({ status }) => setScanStatus(status)
+      })
+      await loadDashboardData()
+      if (result && result.totalScanned > 0) {
+        setScanStatus(`Imported ${result.totalScanned} file(s)`)
+        setTimeout(() => setScanStatus(''), 2500)
+      }
+    } catch (err) {
+      console.warn('Pick files error:', err)
+    } finally {
+      setIsScanning(false)
     }
   }
 
@@ -119,15 +142,18 @@ export default function HomeScreen() {
     try {
       setIsScanning(true)
       setScanStatus('Opening folder picker...')
-      await scanCustomFolderSAF({
+      const result = await scanCustomFolderSAF({
         onProgress: ({ status }) => setScanStatus(status)
       })
       await loadDashboardData()
+      if (result && result.newOrUpdated > 0) {
+        setScanStatus(`Added ${result.newOrUpdated} tracks`)
+        setTimeout(() => setScanStatus(''), 2500)
+      }
     } catch (err) {
       console.warn('Folder scan error:', err)
     } finally {
       setIsScanning(false)
-      setScanStatus('')
     }
   }
 
@@ -170,6 +196,21 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={[
+              styles.scanButton,
+              { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full, marginRight: spacing.xs }
+            ]}
+            activeOpacity={0.8}
+            onPress={handlePickFiles}
+            disabled={isScanning}
+          >
+            <FilePlus size={16} color={theme.colors.accent} />
+            <Text style={[styles.scanButtonText, { color: theme.colors.textPrimary }]}>
+              Files
+            </Text>
+          </TouchableOpacity>
+
           {Platform.OS === 'android' && (
             <TouchableOpacity
               style={[
@@ -271,11 +312,14 @@ export default function HomeScreen() {
         {isEmptyLibrary ? (
           <EmptyState
             title="No media found yet."
-            message="Scan your device to build your library, or pick a specific folder containing music."
+            message="Scan your device to build your library, or pick files/folders directly."
             actionLabel="Scan Device"
             onAction={handleScan}
-            secondaryActionLabel="Pick Folder"
-            onSecondaryAction={handlePickFolder}
+            secondaryActionLabel="Pick Files"
+            onSecondaryAction={handlePickFiles}
+            tertiaryActionLabel={Platform.OS === 'android' ? 'Pick Folder' : undefined}
+            onTertiaryAction={Platform.OS === 'android' ? handlePickFolder : undefined}
+            tip="Tip: If Android blocks a folder (e.g. Downloads) for privacy, use 'Pick Files' to select audio or video files directly."
             loading={isScanning}
           />
         ) : (

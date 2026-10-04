@@ -10,6 +10,9 @@ export function EmptyState({
   onAction,
   secondaryActionLabel,
   onSecondaryAction,
+  tertiaryActionLabel,
+  onTertiaryAction,
+  tip,
   loading = false
 }) {
   const { theme, spacing, radii, typography } = useTheme()
@@ -73,6 +76,28 @@ export function EmptyState({
           </Text>
         </TouchableOpacity>
       )}
+
+      {onTertiaryAction && tertiaryActionLabel && (
+        <TouchableOpacity
+          style={[
+            styles.tertiaryButton,
+            { borderColor: theme.colors.borderSubtle, borderRadius: radii.md }
+          ]}
+          activeOpacity={0.8}
+          onPress={onTertiaryAction}
+          disabled={loading}
+        >
+          <Text style={[styles.secondaryButtonText, { color: theme.colors.textSecondary, fontWeight: typography.weights.medium }]}>
+            {tertiaryActionLabel}
+          </Text>
+        </TouchableOpacity>
+      )}
+
+      {tip && (
+        <Text style={[styles.tipText, { color: theme.colors.textMuted }]}>
+          {tip}
+        </Text>
+      )}
     </View>
   )
 }
@@ -123,5 +148,21 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: {
     fontSize: 14
+  },
+  tertiaryButton: {
+    marginTop: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    minWidth: 140
+  },
+  tipText: {
+    marginTop: 16,
+    fontSize: 12,
+    textAlign: 'center',
+    maxWidth: 280,
+    lineHeight: 17
   }
 })

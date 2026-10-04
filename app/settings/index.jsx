@@ -19,6 +19,7 @@ import {
   Laptop,
   FolderSync,
   FolderPlus,
+  FilePlus,
   Trash2,
   ShieldCheck,
   Info,
@@ -30,7 +31,7 @@ import {
 } from 'lucide-react-native'
 import { useTheme } from '../../src/stores/useTheme'
 import { APP_CONFIG } from '../../src/constants/config'
-import { scanLocalMedia, scanCustomFolderSAF } from '../../src/services/mediaScanner/mediaScanner'
+import { scanLocalMedia, scanCustomFolderSAF, pickFilesAndImport } from '../../src/services/mediaScanner/mediaScanner'
 import { clearAllLibraryData, clearDemoMedia } from '../../src/database/db'
 import { Header } from '../../src/components/Header'
 
@@ -64,6 +65,20 @@ export default function SettingsScreen() {
       }
     } catch (e) {
       Alert.alert('Folder Import Notice', e.message || 'Folder scan completed.')
+    } finally {
+      setIsScanning(false)
+    }
+  }
+
+  const handlePickFiles = async () => {
+    try {
+      setIsScanning(true)
+      const res = await pickFilesAndImport()
+      if (res && res.totalScanned > 0) {
+        Alert.alert('Files Imported', `Successfully imported ${res.totalScanned} media file(s).`)
+      }
+    } catch (e) {
+      Alert.alert('File Import Notice', e.message || 'File picker completed.')
     } finally {
       setIsScanning(false)
     }
@@ -197,6 +212,24 @@ export default function SettingsScreen() {
             LIBRARY & STORAGE
           </Text>
           <View style={[styles.card, { backgroundColor: theme.colors.surfaceElevated, borderColor: theme.colors.border, borderRadius: radii.md }]}>
+            <TouchableOpacity
+              style={[styles.row, { borderBottomColor: theme.colors.borderSubtle, borderBottomWidth: 1 }]}
+              onPress={handlePickFiles}
+              disabled={isScanning}
+            >
+              <View style={styles.rowLeft}>
+                <View style={[styles.iconBox, { backgroundColor: theme.colors.accentSubtle, borderRadius: radii.sm }]}>
+                  <FilePlus size={18} color={theme.colors.accent} />
+                </View>
+                <View>
+                  <Text style={[styles.rowLabel, { color: theme.colors.textPrimary }]}>Import Media Files</Text>
+                  <Text style={[styles.rowSub, { color: theme.colors.textSecondary }]}>
+                    Pick audio or video files from any folder (including Downloads)
+                  </Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+
             {Platform.OS === 'android' && (
               <TouchableOpacity
                 style={[styles.row, { borderBottomColor: theme.colors.borderSubtle, borderBottomWidth: 1 }]}
@@ -208,9 +241,9 @@ export default function SettingsScreen() {
                     <FolderPlus size={18} color={theme.colors.accent} />
                   </View>
                   <View>
-                    <Text style={[styles.rowLabel, { color: theme.colors.textPrimary }]}>Choose Music Folder (SAF)</Text>
+                    <Text style={[styles.rowLabel, { color: theme.colors.textPrimary }]}>Import Folder</Text>
                     <Text style={[styles.rowSub, { color: theme.colors.textSecondary }]}>
-                      Select a specific folder (e.g. Music, Downloads) to import
+                      Grant access to a specific music or video directory
                     </Text>
                   </View>
                 </View>

@@ -1,9 +1,15 @@
-import { Platform } from 'react-native'
+import { Platform, PermissionsAndroid } from 'react-native'
 import Constants, { ExecutionEnvironment } from 'expo-constants'
 import { requireOptionalNativeModule } from 'expo-modules-core'
 import * as FileSystemLegacy from 'expo-file-system/legacy'
 import * as FileSystemModern from 'expo-file-system'
-import { upsertMediaItemsBatch, getAllMediaItems, setSetting, getSetting, clearDemoMedia } from '../../database/db'
+import {
+  upsertMediaItemsBatch,
+  getAllMediaItems,
+  setSetting,
+  getSetting,
+  clearDemoMedia
+} from '../../database/db'
 import { APP_CONFIG } from '../../constants/config'
 
 function getSAF() {
@@ -11,34 +17,104 @@ function getSAF() {
 }
 
 /**
- * Dynamically resolves the MediaLibrary module:
- * 1. Checks for modern ExpoMediaLibraryNext (available in custom dev builds / standalone APKs)
- * 2. Falls back to ExpoMediaLibrary via legacy import (available in standard Expo Go)
+ * Resolves the legacy MediaLibrary module that exposes getAssetsAsync
  */
-function getMediaLibrary() {
+function getLegacyMediaLibrary() {
   if (Platform.OS === 'web') return null
-
-  // 1. Try modern Next module (compiled in custom dev builds and standalone APKs)
   try {
-    const nextModule = requireOptionalNativeModule('ExpoMediaLibraryNext')
-    if (nextModule) {
-      return require('expo-media-library')
+    const mod = require('expo-media-library/legacy')
+    if (mod && typeof mod.getAssetsAsync === 'function') {
+      return mod
     }
   } catch {}
-
-  // 2. Try legacy MediaLibrary module (available in Expo Go on Android)
   try {
-    const legacyModule = requireOptionalNativeModule('ExpoMediaLibrary')
-    if (legacyModule) {
-      return require('expo-media-library/legacy')
+    const mod = require('expo-media-library')
+    if (mod && typeof mod.getAssetsAsync === 'function') {
+      return mod
     }
   } catch {}
-
-  try {
-    return require('expo-media-library')
-  } catch {}
-
   return null
+}
+
+/**
+ * Resolves the modern MediaLibrary module that exposes the Query class
+ */
+function getNextMediaLibrary() {
+  if (Platform.OS === 'web') return null
+  try {
+    const mod = require('expo-media-library')
+    if (mod && mod.Query) {
+      return mod
+    }
+  } catch {}
+  return null
+}
+
+/**
+ * Requests Android device storage & media permissions through both
+ * PermissionsAndroid and Expo MediaLibrary for 100% platform coverage.
+ */
+export async function requestMediaPermissions({ scanAudio = true, scanVideo = true } = {}) {
+  if (Platform.OS === 'web') return true
+
+  let granted = false
+
+  // 1. Android Native Runtime Permissions via PermissionsAndroid
+  if (Platform.OS === 'android') {
+    try {
+      if (Platform.Version >= 33) {
+        const permsToAsk = []
+        if (scanAudio) permsToAsk.push(PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO)
+        if (scanVideo) permsToAsk.push(PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO)
+
+        const result = await PermissionsAndroid.requestMultiple(permsToAsk)
+        const allGranted = permsToAsk.every(
+          (perm) => result[perm] === PermissionsAndroid.RESULTS.GRANTED
+        )
+        if (allGranted) granted = true
+      } else {
+        const result = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE
+        )
+        if (result === PermissionsAndroid.RESULTS.GRANTED) granted = true
+      }
+    } catch (err) {
+      console.warn('PermissionsAndroid request error:', err)
+    }
+  }
+
+  // 2. Sync with Expo MediaLibrary permission hook
+  try {
+    const ml = getLegacyMediaLibrary() || getNextMediaLibrary()
+    if (ml?.requestPermissionsAsync) {
+      const granular = []
+      if (scanAudio) granular.push('audio')
+      if (scanVideo) granular.push('video')
+      const res = await ml.requestPermissionsAsync(false, granular)
+      if (res?.status === 'granted') granted = true
+    }
+  } catch (expoErr) {
+    try {
+      const ml = getLegacyMediaLibrary() || getNextMediaLibrary()
+      if (ml?.requestPermissionsAsync) {
+        const res = await ml.requestPermissionsAsync(false, ['audio'])
+        if (res?.status === 'granted') granted = true
+      }
+    } catch {}
+  }
+
+  // Also check existing status
+  if (!granted) {
+    try {
+      const ml = getLegacyMediaLibrary() || getNextMediaLibrary()
+      if (ml?.getPermissionsAsync) {
+        const check = await ml.getPermissionsAsync(false, ['audio'])
+        if (check?.status === 'granted') granted = true
+      }
+    } catch {}
+  }
+
+  return granted
 }
 
 /**
@@ -82,16 +158,51 @@ function parseTrackMetadata(filename) {
 function extractFolderName(uri, filename) {
   if (!uri) return 'Internal Storage'
   try {
-    const parts = uri.split('/')
+    let decoded = uri
+    try {
+      decoded = decodeURIComponent(uri)
+    } catch {}
+    const parts = decoded.split('/')
     if (parts.length > 2) {
-      return decodeURIComponent(parts[parts.length - 2])
+      const parent = parts[parts.length - 2]
+      if (parent && !parent.includes(':')) {
+        return parent
+      }
+      if (parent && parent.includes(':')) {
+        return parent.split(':').pop() || 'Music'
+      }
     }
   } catch {}
   return 'Music'
 }
 
 /**
- * Asynchronous, incremental media scanner for local device storage.
+ * Robust filename extraction from SAF or document URIs
+ */
+function extractFilenameFromSAFUri(fileUri) {
+  if (!fileUri) return 'Track'
+  try {
+    let decoded = fileUri
+    try {
+      decoded = decodeURIComponent(fileUri)
+      if (decoded.includes('%')) {
+        decoded = decodeURIComponent(decoded)
+      }
+    } catch {}
+
+    const slashParts = decoded.split('/')
+    let segment = slashParts[slashParts.length - 1] || ''
+    if (segment.includes(':')) {
+      segment = segment.split(':').pop() || segment
+    }
+    return segment || 'Track'
+  } catch {
+    return 'Track'
+  }
+}
+
+/**
+ * Asynchronous, incremental media scanner for local device storage (MediaStore).
  */
 export async function scanLocalMedia({
   onProgress = () => {},
@@ -99,189 +210,420 @@ export async function scanLocalMedia({
   scanVideo = true,
   forceFullRescan = false
 } = {}) {
-  const MediaLibrary = getMediaLibrary()
-
   // In web environment, seed demonstration media so UI can be tested
-  if (Platform.OS === 'web' || !MediaLibrary || !MediaLibrary.getPermissionsAsync) {
-    onProgress({ progress: 0.3, status: 'Scanning device storage...' })
+  if (Platform.OS === 'web') {
+    onProgress({ progress: 0.3, status: 'Scanning web environment...' })
     await seedDemoMediaIfEmpty()
     await setSetting(APP_CONFIG.storageKeys.hasCompletedInitialScan, true)
     onProgress({ progress: 1.0, status: 'Scan complete!' })
-    return { totalScanned: 4, newOrUpdated: 4 }
+    return { totalScanned: 4, newOrUpdated: 4, permissionDenied: false }
+  }
+
+  onProgress({ progress: 0.05, status: 'Checking media permissions...' })
+  const permissionGranted = await requestMediaPermissions({ scanAudio, scanVideo })
+
+  if (!permissionGranted) {
+    onProgress({ progress: 1.0, totalScanned: 0, status: 'Storage permission required' })
+    return { totalScanned: 0, newOrUpdated: 0, permissionDenied: true }
   }
 
   const isExpoGo =
     Constants?.executionEnvironment === ExecutionEnvironment.StoreClient ||
     Constants?.appOwnership === 'expo'
 
-  // Standalone APKs declare all permissions; Expo Go restricts to general storage
-  const permissionsToRequest = isExpoGo
-    ? ['audio']
-    : (scanAudio && scanVideo ? ['audio', 'video'] : scanAudio ? ['audio'] : ['video'])
-
-  // Check platform permissions with graceful fallbacks
-  let permissionGranted = false
-  if (Platform.OS !== 'web') {
-    try {
-      let status
-      try {
-        const check = await MediaLibrary.getPermissionsAsync(false, permissionsToRequest)
-        status = check?.status
-      } catch {
-        // Fallback without granular permissions if manifest lacks READ_MEDIA_AUDIO in Expo Go
-        try {
-          const check = await MediaLibrary.getPermissionsAsync()
-          status = check?.status
-        } catch {}
-      }
-
-      if (status !== 'granted') {
-        try {
-          const requestResult = await MediaLibrary.requestPermissionsAsync(false, permissionsToRequest)
-          status = requestResult?.status
-        } catch {
-          try {
-            const requestResult = await MediaLibrary.requestPermissionsAsync()
-            status = requestResult?.status
-          } catch {}
-        }
-      }
-
-      permissionGranted = (status === 'granted')
-    } catch (permErr) {
-      console.warn('Error checking/requesting media permissions:', permErr)
-    }
-  }
-
-  const mediaTypes = []
-  if (scanAudio && MediaLibrary.MediaType?.audio) {
-    mediaTypes.push(MediaLibrary.MediaType.audio)
-  }
-  if (scanVideo && !isExpoGo && MediaLibrary.MediaType?.video) {
-    mediaTypes.push(MediaLibrary.MediaType.video)
-  }
-
   let totalScanned = 0
   let totalNewOrUpdated = 0
 
-  if (permissionGranted && mediaTypes.length > 0) {
-    let hasNextPage = true
-    let afterCursor = undefined
-    const BATCH_SIZE = 50
+  // -------------------------------------------------------------
+  // Strategy 1: Expo MediaLibrary Legacy (getAssetsAsync via MediaStore)
+  // -------------------------------------------------------------
+  const LegacyML = getLegacyMediaLibrary()
+  if (LegacyML && typeof LegacyML.getAssetsAsync === 'function') {
+    const mediaTypes = []
+    if (scanAudio && LegacyML.MediaType?.audio) {
+      mediaTypes.push(LegacyML.MediaType.audio)
+    }
+    if (scanVideo && !isExpoGo && LegacyML.MediaType?.video) {
+      mediaTypes.push(LegacyML.MediaType.video)
+    }
 
-    onProgress({ progress: 0, status: 'Scanning device storage...' })
+    if (mediaTypes.length > 0) {
+      let hasNextPage = true
+      let afterCursor = undefined
+      const BATCH_SIZE = 100
 
-    const sortByOption = MediaLibrary.SortBy?.modificationTime
-      ? [MediaLibrary.SortBy.modificationTime]
-      : undefined
+      onProgress({ progress: 0.1, status: 'Querying device media library...' })
 
-    while (hasNextPage) {
-      try {
-        const queryOptions = {
-          mediaType: mediaTypes,
-          first: BATCH_SIZE,
-          after: afterCursor
-        }
-        if (sortByOption) {
-          queryOptions.sortBy = sortByOption
-        }
+      const sortByOption = LegacyML.SortBy?.modificationTime
+        ? [LegacyML.SortBy.modificationTime]
+        : undefined
 
-        let page
+      while (hasNextPage) {
         try {
-          page = await MediaLibrary.getAssetsAsync(queryOptions)
-        } catch (queryErr) {
-          // If sortBy fails on device, retry without sorting
-          delete queryOptions.sortBy
-          page = await MediaLibrary.getAssetsAsync(queryOptions)
-        }
+          const queryOptions = {
+            mediaType: mediaTypes,
+            first: BATCH_SIZE,
+            after: afterCursor
+          }
+          if (sortByOption) {
+            queryOptions.sortBy = sortByOption
+          }
 
-        const assets = page.assets || []
-        totalScanned += assets.length
-
-        const itemsToUpsert = []
-
-        for (const asset of assets) {
+          let page
           try {
-            const isVideo = asset.mediaType === MediaLibrary.MediaType?.video || asset.mediaType === 'video'
-            const type = isVideo ? 'video' : 'audio'
-            const { title, artist } = parseTrackMetadata(asset.filename)
-            const folder = extractFolderName(asset.uri, asset.filename)
-            const durationMs = Math.round((asset.duration || 0) * 1000)
-            const deterministicId = asset.id || generateDeterministicId(asset.uri)
+            page = await LegacyML.getAssetsAsync(queryOptions)
+          } catch (queryErr) {
+            delete queryOptions.sortBy
+            page = await LegacyML.getAssetsAsync(queryOptions)
+          }
 
-            itemsToUpsert.push({
-              id: String(deterministicId),
-              uri: asset.uri,
-              type,
-              title,
-              artist: isVideo ? 'Local Video' : artist,
-              album: isVideo ? 'Videos' : (asset.albumId || folder || 'Local Storage'),
-              albumArtist: null,
-              genre: null,
-              duration: durationMs,
-              size: 0,
-              mimeType: isVideo ? 'video/mp4' : 'audio/mpeg',
-              year: null,
-              trackNumber: null,
-              discNumber: null,
-              artworkUri: null,
-              folder,
-              dateAdded: asset.creationTime ? asset.creationTime * 1000 : Date.now(),
-              dateModified: asset.modificationTime ? asset.modificationTime * 1000 : Date.now()
-            })
-          } catch (itemErr) {
-            console.warn('Skipping unparsable asset:', asset?.filename, itemErr)
+          const assets = page?.assets || []
+          totalScanned += assets.length
+
+          const itemsToUpsert = []
+          for (const asset of assets) {
+            try {
+              const isVideo =
+                asset.mediaType === LegacyML.MediaType?.video || asset.mediaType === 'video'
+              const type = isVideo ? 'video' : 'audio'
+              const { title, artist } = parseTrackMetadata(asset.filename)
+              const folder = extractFolderName(asset.uri, asset.filename)
+              const durationMs = Math.round((asset.duration || 0) * 1000)
+              const deterministicId = asset.id || generateDeterministicId(asset.uri)
+
+              itemsToUpsert.push({
+                id: String(deterministicId),
+                uri: asset.uri,
+                type,
+                title,
+                artist: isVideo ? 'Local Video' : artist,
+                album: isVideo ? 'Videos' : (asset.albumId || folder || 'Local Music'),
+                albumArtist: null,
+                genre: null,
+                duration: durationMs,
+                size: 0,
+                mimeType: isVideo ? 'video/mp4' : 'audio/mpeg',
+                year: null,
+                trackNumber: null,
+                discNumber: null,
+                artworkUri: null,
+                folder,
+                dateAdded: asset.creationTime ? asset.creationTime * 1000 : Date.now(),
+                dateModified: asset.modificationTime ? asset.modificationTime * 1000 : Date.now()
+              })
+            } catch (itemErr) {
+              console.warn('Skipping unparsable asset:', asset?.filename, itemErr)
+            }
+          }
+
+          if (itemsToUpsert.length > 0) {
+            await clearDemoMedia()
+            await upsertMediaItemsBatch(itemsToUpsert)
+            totalNewOrUpdated += itemsToUpsert.length
+          }
+
+          hasNextPage = Boolean(page?.hasNextPage)
+          afterCursor = page?.endCursor
+
+          onProgress({
+            progress: Math.min(0.9, totalScanned / Math.max(page?.totalCount || 1, totalScanned)),
+            totalScanned,
+            status: `Found ${totalScanned} items...`
+          })
+        } catch (pageErr) {
+          console.warn('Media scan page error in LegacyML:', pageErr)
+          break
+        }
+      }
+    }
+  }
+
+  // -------------------------------------------------------------
+  // Strategy 2: Modern ExpoMediaLibrary Query API (if Strategy 1 found 0)
+  // -------------------------------------------------------------
+  if (totalScanned === 0) {
+    const NextML = getNextMediaLibrary()
+    if (NextML && NextML.Query) {
+      try {
+        onProgress({ progress: 0.15, status: 'Scanning media catalog...' })
+        const typesToQuery = []
+        if (scanAudio && NextML.MediaType?.AUDIO) typesToQuery.push(NextML.MediaType.AUDIO)
+        if (scanVideo && !isExpoGo && NextML.MediaType?.VIDEO) typesToQuery.push(NextML.MediaType.VIDEO)
+
+        if (typesToQuery.length > 0) {
+          const query = new NextML.Query().within(NextML.AssetField.MEDIA_TYPE, typesToQuery)
+          const assets = await query.exe()
+
+          if (assets && assets.length > 0) {
+            totalScanned += assets.length
+            const itemsToUpsert = []
+
+            for (const asset of assets) {
+              try {
+                const uri = await asset.getUri().catch(() => asset.id)
+                const filename = await asset.getFilename().catch(() => 'Track')
+                const duration = await asset.getDuration().catch(() => 0)
+                const mediaType = await asset.getMediaType().catch(() => 'audio')
+                const modTime = await asset.getModificationTime().catch(() => Date.now())
+
+                const isVideo = mediaType === 'video'
+                const type = isVideo ? 'video' : 'audio'
+                const { title, artist } = parseTrackMetadata(filename)
+                const folder = extractFolderName(uri, filename)
+                const durationMs = Math.round(duration || 0)
+                const deterministicId = asset.id || generateDeterministicId(uri)
+
+                itemsToUpsert.push({
+                  id: String(deterministicId),
+                  uri,
+                  type,
+                  title,
+                  artist: isVideo ? 'Local Video' : artist,
+                  album: isVideo ? 'Videos' : (folder || 'Local Music'),
+                  albumArtist: null,
+                  genre: null,
+                  duration: durationMs,
+                  size: 0,
+                  mimeType: isVideo ? 'video/mp4' : 'audio/mpeg',
+                  year: null,
+                  trackNumber: null,
+                  discNumber: null,
+                  artworkUri: null,
+                  folder,
+                  dateAdded: Date.now(),
+                  dateModified: modTime || Date.now()
+                })
+              } catch (itemErr) {
+                console.warn('Error reading asset from NextML:', itemErr)
+              }
+            }
+
+            if (itemsToUpsert.length > 0) {
+              await clearDemoMedia()
+              await upsertMediaItemsBatch(itemsToUpsert)
+              totalNewOrUpdated += itemsToUpsert.length
+            }
+          }
+        }
+      } catch (nextErr) {
+        console.warn('NextML Query error:', nextErr)
+      }
+    }
+  }
+
+  // Record that initial scan completed
+  await setSetting(APP_CONFIG.storageKeys.hasCompletedInitialScan, true)
+
+  const finalStatus =
+    totalScanned > 0
+      ? `Scan complete! (${totalScanned} items indexed)`
+      : 'Scan complete. No media found in system catalog.'
+
+  onProgress({ progress: 1.0, totalScanned, status: finalStatus })
+  return {
+    totalScanned,
+    newOrUpdated: totalNewOrUpdated,
+    permissionDenied: false,
+    isEmpty: totalScanned === 0
+  }
+}
+
+/**
+ * Lets the user pick specific audio/video files directly from anywhere on their device
+ * (including Downloads folder, SD card, Drive) without any Android SAF folder restrictions.
+ */
+export async function pickFilesAndImport({ onProgress = () => {} } = {}) {
+  if (Platform.OS === 'web') return { totalScanned: 0, newOrUpdated: 0 }
+
+  try {
+    onProgress({ progress: 0.1, status: 'Opening file picker...' })
+
+    const ExpoFile = FileSystemModern?.File
+    if (!ExpoFile || !ExpoFile.pickFileAsync) {
+      return { totalScanned: 0, newOrUpdated: 0, error: 'File picker unavailable' }
+    }
+
+    const pickResult = await ExpoFile.pickFileAsync({
+      multipleFiles: true,
+      mimeTypes: ['audio/*', 'video/*']
+    })
+
+    if (!pickResult || pickResult.canceled) {
+      return { totalScanned: 0, newOrUpdated: 0, cancelled: true }
+    }
+
+    const files = Array.isArray(pickResult.result) ? pickResult.result : [pickResult.result]
+    if (files.length === 0) {
+      return { totalScanned: 0, newOrUpdated: 0 }
+    }
+
+    onProgress({ progress: 0.3, status: `Importing ${files.length} selected files...` })
+
+    const audioExtensions = ['.mp3', '.m4a', '.aac', '.wav', '.flac', '.ogg', '.opus', '.wma']
+    const videoExtensions = ['.mp4', '.mkv', '.webm', '.3gp', '.mov', '.avi', '.ts']
+
+    const itemsToUpsert = []
+    for (const file of files) {
+      try {
+        const name = file.name || extractFilenameFromSAFUri(file.uri) || 'Imported Media'
+        const lower = name.toLowerCase()
+        const isVideo = videoExtensions.some((ext) => lower.endsWith(ext))
+        const isAudio = !isVideo
+        const type = isVideo ? 'video' : 'audio'
+        const { title, artist } = parseTrackMetadata(name)
+        const deterministicId = generateDeterministicId(file.uri)
+
+        itemsToUpsert.push({
+          id: deterministicId,
+          uri: file.uri,
+          type,
+          title,
+          artist: isAudio ? artist : 'Local Video',
+          album: isAudio ? 'Imported Music' : 'Imported Videos',
+          albumArtist: null,
+          genre: null,
+          duration: 0,
+          size: file.size || 0,
+          mimeType: isAudio ? 'audio/mpeg' : 'video/mp4',
+          year: null,
+          trackNumber: null,
+          discNumber: null,
+          artworkUri: null,
+          folder: 'Imported',
+          dateAdded: Date.now(),
+          dateModified: Date.now()
+        })
+      } catch (itemErr) {
+        console.warn('Error parsing picked file:', itemErr)
+      }
+    }
+
+    if (itemsToUpsert.length > 0) {
+      await clearDemoMedia()
+      await upsertMediaItemsBatch(itemsToUpsert)
+    }
+
+    onProgress({
+      progress: 1.0,
+      totalScanned: itemsToUpsert.length,
+      status: `Imported ${itemsToUpsert.length} items!`
+    })
+    return { totalScanned: itemsToUpsert.length, newOrUpdated: itemsToUpsert.length }
+  } catch (err) {
+    console.warn('Error in pickFilesAndImport:', err)
+    return { totalScanned: 0, newOrUpdated: 0, error: err?.message || String(err) }
+  }
+}
+
+/**
+ * Lets the user pick any local folder via Android Storage Access Framework (SAF)
+ * or modern FileSystem Directory picker, and recursively imports all audio/video files.
+ */
+export async function scanCustomFolderSAF({ onProgress = () => {} } = {}) {
+  if (Platform.OS !== 'android') return { totalScanned: 0, newOrUpdated: 0 }
+
+  const audioExtensions = ['.mp3', '.m4a', '.aac', '.wav', '.flac', '.ogg', '.opus', '.wma']
+  const videoExtensions = ['.mp4', '.mkv', '.webm', '.3gp', '.mov', '.avi', '.ts']
+
+  // -------------------------------------------------------------
+  // Approach 1: Modern FileSystem Directory picker (SDK 53+)
+  // -------------------------------------------------------------
+  try {
+    const ExpoDirectory = FileSystemModern?.Directory
+    if (ExpoDirectory && ExpoDirectory.pickDirectoryAsync) {
+      onProgress({ progress: 0.05, status: 'Select your Music folder...' })
+      let rootDir = null
+      try {
+        rootDir = await ExpoDirectory.pickDirectoryAsync()
+      } catch (pickErr) {
+        return { totalScanned: 0, newOrUpdated: 0, cancelled: true }
+      }
+
+      if (rootDir && rootDir.uri) {
+        onProgress({ progress: 0.2, status: 'Scanning folder contents...' })
+        const itemsToUpsert = []
+        const dirQueue = [rootDir]
+        let scanned = 0
+
+        while (dirQueue.length > 0 && itemsToUpsert.length < 5000) {
+          const current = dirQueue.shift()
+          try {
+            const entries = current.list()
+            for (const entry of entries) {
+              try {
+                if (
+                  entry instanceof ExpoDirectory ||
+                  entry?.constructor?.name === 'Directory' ||
+                  entry?.isDirectory
+                ) {
+                  dirQueue.push(entry)
+                } else {
+                  const name = entry.name || extractFilenameFromSAFUri(entry.uri)
+                  const lower = name.toLowerCase()
+                  const isAudio = audioExtensions.some((ext) => lower.endsWith(ext))
+                  const isVideo = videoExtensions.some((ext) => lower.endsWith(ext))
+
+                  if (isAudio || isVideo) {
+                    const type = isVideo ? 'video' : 'audio'
+                    const { title, artist } = parseTrackMetadata(name)
+                    const folder = current.name || 'Custom Folder'
+                    const deterministicId = generateDeterministicId(entry.uri)
+
+                    itemsToUpsert.push({
+                      id: deterministicId,
+                      uri: entry.uri,
+                      type,
+                      title,
+                      artist: isVideo ? 'Local Video' : artist,
+                      album: isVideo ? 'Videos' : folder,
+                      albumArtist: null,
+                      genre: null,
+                      duration: 0,
+                      size: entry.size || 0,
+                      mimeType: isVideo ? 'video/mp4' : 'audio/mpeg',
+                      year: null,
+                      trackNumber: null,
+                      discNumber: null,
+                      artworkUri: null,
+                      folder,
+                      dateAdded: Date.now(),
+                      dateModified: Date.now()
+                    })
+                    scanned++
+                  }
+                }
+              } catch {}
+            }
+          } catch (dirErr) {
+            console.warn('Error reading modern Directory:', dirErr)
           }
         }
 
         if (itemsToUpsert.length > 0) {
           await clearDemoMedia()
           await upsertMediaItemsBatch(itemsToUpsert)
-          totalNewOrUpdated += itemsToUpsert.length
         }
 
-        hasNextPage = Boolean(page.hasNextPage)
-        afterCursor = page.endCursor
-
         onProgress({
-          progress: totalScanned / Math.max(page.totalCount || 1, totalScanned),
-          totalScanned,
-          status: `Found ${totalScanned} items...`
+          progress: 1.0,
+          totalScanned: scanned,
+          status: `Added ${itemsToUpsert.length} local items!`
         })
-      } catch (pageErr) {
-        console.warn('Media scan page error:', pageErr)
-        break
+        return { totalScanned: scanned, newOrUpdated: itemsToUpsert.length }
       }
     }
+  } catch (modernErr) {
+    console.warn('Directory.pickDirectoryAsync fallback to SAF:', modernErr)
   }
 
-  // If MediaStore found 0 items on Android (common in Expo Go due to Google Play permission limitations),
-  // automatically launch the Android Storage Access Framework folder picker to let user select their Music folder!
-  if (totalScanned === 0 && Platform.OS === 'android') {
-    onProgress({ progress: 0.1, status: 'Select your Music folder to import tracks...' })
-    const safResult = await scanCustomFolderSAF({ onProgress })
-    totalScanned += safResult.totalScanned
-    totalNewOrUpdated += safResult.newOrUpdated
-  }
-
-  // Record that initial scan completed
-  await setSetting(APP_CONFIG.storageKeys.hasCompletedInitialScan, true)
-
-  onProgress({ progress: 1.0, totalScanned, status: `Scan complete! (${totalScanned} items)` })
-  return { totalScanned, newOrUpdated: totalNewOrUpdated, permissionDenied: !permissionGranted }
-}
-
-/**
- * Lets the user pick any local folder via Android Storage Access Framework (SAF)
- * and recursively imports all audio/video files directly into VEYRA SQLite database.
- */
-export async function scanCustomFolderSAF({ onProgress = () => {} } = {}) {
-  if (Platform.OS !== 'android') return { totalScanned: 0, newOrUpdated: 0 }
+  // -------------------------------------------------------------
+  // Approach 2: StorageAccessFramework (SAF) fallback
+  // -------------------------------------------------------------
   const SAF = getSAF()
   if (!SAF || !SAF.requestDirectoryPermissionsAsync) {
-    console.warn('StorageAccessFramework is not available on this platform/runtime.')
     return { totalScanned: 0, newOrUpdated: 0, error: 'StorageAccessFramework unavailable' }
   }
+
   try {
     let initialUri = null
     try {
@@ -296,13 +638,8 @@ export async function scanCustomFolderSAF({ onProgress = () => {} } = {}) {
     onProgress({ progress: 0.1, status: 'Scanning folder contents...' })
     const rootDirectoryUri = permissions.directoryUri
 
-    const audioExtensions = ['.mp3', '.m4a', '.aac', '.wav', '.flac', '.ogg', '.opus', '.wma']
-    const videoExtensions = ['.mp4', '.mkv', '.webm', '.3gp', '.mov', '.avi', '.ts']
-
     const itemsToUpsert = []
     let scanned = 0
-
-    // Breadth-first search traversal of directories (up to 5 levels deep)
     const dirQueue = [{ uri: rootDirectoryUri, depth: 0 }]
     const visitedDirs = new Set([rootDirectoryUri])
 
@@ -313,8 +650,7 @@ export async function scanCustomFolderSAF({ onProgress = () => {} } = {}) {
 
         for (const fileUri of fileUris) {
           try {
-            const decodedUri = decodeURIComponent(fileUri)
-            const filename = decodedUri.split('/').pop()?.split(':').pop() || 'Track'
+            const filename = extractFilenameFromSAFUri(fileUri)
             const lower = filename.toLowerCase()
 
             const isAudio = audioExtensions.some((ext) => lower.endsWith(ext))
@@ -323,7 +659,7 @@ export async function scanCustomFolderSAF({ onProgress = () => {} } = {}) {
             if (isAudio || isVideo) {
               const type = isVideo ? 'video' : 'audio'
               const { title, artist } = parseTrackMetadata(filename)
-              const folder = extractFolderName(decodedUri, filename)
+              const folder = extractFolderName(fileUri, filename)
               const deterministicId = generateDeterministicId(fileUri)
 
               itemsToUpsert.push({
@@ -348,42 +684,46 @@ export async function scanCustomFolderSAF({ onProgress = () => {} } = {}) {
               })
               scanned++
             } else if (current.depth < 5 && !visitedDirs.has(fileUri)) {
-              // Check if sub-element is a directory
-              try {
-                const getInfo = FileSystemLegacy?.getInfoAsync || FileSystemModern?.getInfoAsync
-                if (getInfo) {
-                  const info = await getInfo(fileUri)
-                  if (info && info.isDirectory) {
-                    visitedDirs.add(fileUri)
+              // Check if sub-element might be a directory
+              const dotIdx = filename.lastIndexOf('.')
+              const looksLikeFileWithExt = dotIdx !== -1 && filename.length - dotIdx <= 5
+              if (!looksLikeFileWithExt) {
+                visitedDirs.add(fileUri)
+                try {
+                  const subFiles = await SAF.readDirectoryAsync(fileUri)
+                  if (Array.isArray(subFiles)) {
                     dirQueue.push({ uri: fileUri, depth: current.depth + 1 })
                   }
-                }
-              } catch {}
+                } catch {}
+              }
             }
           } catch {}
         }
 
         onProgress({
-          progress: Math.min(0.9, 0.2 + (scanned * 0.02)),
+          progress: Math.min(0.9, 0.2 + scanned * 0.02),
           totalScanned: scanned,
           status: `Found ${scanned} items...`
         })
       } catch (dirErr) {
-        console.warn('Error reading SAF directory:', current.uri, dirErr)
+        console.warn('SAF read directory error:', current.uri, dirErr)
       }
     }
 
     if (itemsToUpsert.length > 0) {
-      onProgress({ progress: 0.95, status: `Saving ${itemsToUpsert.length} items to library...` })
       await clearDemoMedia()
       await upsertMediaItemsBatch(itemsToUpsert)
     }
 
-    onProgress({ progress: 1.0, totalScanned: scanned, status: `Added ${itemsToUpsert.length} local items!` })
+    onProgress({
+      progress: 1.0,
+      totalScanned: scanned,
+      status: `Added ${itemsToUpsert.length} local items!`
+    })
     return { totalScanned: scanned, newOrUpdated: itemsToUpsert.length }
   } catch (err) {
     console.warn('SAF folder scan error:', err)
-    return { totalScanned: 0, newOrUpdated: 0, error: err.message }
+    return { totalScanned: 0, newOrUpdated: 0, error: err?.message || String(err) }
   }
 }
 

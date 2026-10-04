@@ -178,12 +178,33 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
             .build()
     }
 
+    private fun withController(action: (MediaController) -> Unit) {
+        val current = mediaController
+        if (current != null) {
+            mainHandler.post { action(current) }
+        } else {
+            val future = controllerFuture
+            if (future != null) {
+                future.addListener({
+                    try {
+                        val controller = mediaController ?: future.get()
+                        mediaController = controller
+                        if (controller != null) {
+                            mainHandler.post { action(controller) }
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }, MoreExecutors.directExecutor())
+            }
+        }
+    }
+
     // ---------------- React Methods ----------------
 
     @ReactMethod
     fun play(mediaMap: ReadableMap) {
-        mainHandler.post {
-            val controller = mediaController ?: return@post
+        withController { controller ->
             val item = buildMediaItem(mediaMap)
             controller.setMediaItem(item)
             controller.prepare()
@@ -193,50 +214,49 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun pause() {
-        mainHandler.post {
-            mediaController?.pause()
+        withController { controller ->
+            controller.pause()
         }
     }
 
     @ReactMethod
     fun resume() {
-        mainHandler.post {
-            mediaController?.play()
+        withController { controller ->
+            controller.play()
         }
     }
 
     @ReactMethod
     fun stop() {
-        mainHandler.post {
-            mediaController?.stop()
+        withController { controller ->
+            controller.stop()
         }
     }
 
     @ReactMethod
     fun seekTo(positionMs: Double) {
-        mainHandler.post {
-            mediaController?.seekTo(positionMs.toLong())
+        withController { controller ->
+            controller.seekTo(positionMs.toLong())
         }
     }
 
     @ReactMethod
     fun skipToNext() {
-        mainHandler.post {
-            mediaController?.seekToNextMediaItem()
+        withController { controller ->
+            controller.seekToNextMediaItem()
         }
     }
 
     @ReactMethod
     fun skipToPrevious() {
-        mainHandler.post {
-            mediaController?.seekToPreviousMediaItem()
+        withController { controller ->
+            controller.seekToPreviousMediaItem()
         }
     }
 
     @ReactMethod
     fun setQueue(items: ReadableArray, startIndex: Int) {
-        mainHandler.post {
-            val controller = mediaController ?: return@post
+        withController { controller ->
             val mediaItems = ArrayList<MediaItem>(items.size())
             for (i in 0 until items.size()) {
                 val map = items.getMap(i)
@@ -252,16 +272,14 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun addToQueue(itemMap: ReadableMap) {
-        mainHandler.post {
-            val controller = mediaController ?: return@post
+        withController { controller ->
             controller.addMediaItem(buildMediaItem(itemMap))
         }
     }
 
     @ReactMethod
     fun addNext(itemMap: ReadableMap) {
-        mainHandler.post {
-            val controller = mediaController ?: return@post
+        withController { controller ->
             val currentIndex = controller.currentMediaItemIndex
             controller.addMediaItem(currentIndex + 1, buildMediaItem(itemMap))
         }
@@ -269,8 +287,7 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun removeFromQueue(index: Int) {
-        mainHandler.post {
-            val controller = mediaController ?: return@post
+        withController { controller ->
             if (index in 0 until controller.mediaItemCount) {
                 controller.removeMediaItem(index)
             }
