@@ -109,7 +109,10 @@ export default function SearchScreen() {
                 track={song}
                 isActive={currentMedia?.id === song.id}
                 isPlaying={isPlaying && currentMedia?.id === song.id}
-                onPress={() => playMedia(song, results.songs, idx)}
+                onPress={() => {
+                  playMedia(song, results.songs, idx)
+                  router.push('/player/audio')
+                }}
               />
             ))}
           </View>

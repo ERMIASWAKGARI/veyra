@@ -393,7 +393,10 @@ export default function HomeScreen() {
                       key={track.id}
                       style={[styles.recentRow, { borderBottomColor: theme.colors.borderSubtle }]}
                       activeOpacity={0.7}
-                      onPress={() => playMedia(track, tracksToDisplay, idx)}
+                      onPress={() => {
+                        playMedia(track, tracksToDisplay, idx)
+                        router.push('/player/audio')
+                      }}
                     >
                       <View style={[styles.trackThumb, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.sm }]}>
                         {track.artworkUri ? (

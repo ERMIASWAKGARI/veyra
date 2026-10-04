@@ -60,6 +60,7 @@ const SORT_OPTIONS = [
 ]
 
 export default function MusicScreen() {
+  const router = useRouter()
   const insets = useSafeAreaInsets()
   const { theme, spacing, radii, typography } = useTheme()
   const { currentMedia, isPlaying, playMedia, addToQueue, playNext } = usePlayback()
@@ -129,11 +130,13 @@ export default function MusicScreen() {
     if (items.length === 0) return
     const randomIndex = Math.floor(Math.random() * items.length)
     playMedia(items[randomIndex], items, randomIndex)
+    router.push('/player/audio')
   }
 
   const handlePlayAll = () => {
     if (items.length === 0) return
     playMedia(items[0], items, 0)
+    router.push('/player/audio')
   }
 
   const handleScanAudio = async () => {
@@ -326,7 +329,10 @@ export default function MusicScreen() {
               isActive={currentMedia?.id === item.id}
               isPlaying={isPlaying && currentMedia?.id === item.id}
               isFavorite={!!favoritesMap[item.id]}
-              onPress={() => playMedia(item, items, index)}
+              onPress={() => {
+                playMedia(item, items, index)
+                router.push('/player/audio')
+              }}
               onToggleFavorite={handleToggleFavorite}
               onMorePress={(track) => setSelectedTrackForPlaylist(track)}
             />

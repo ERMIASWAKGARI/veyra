@@ -1,5 +1,6 @@
 import React from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native'
+import * as Haptics from 'expo-haptics'
 import { Music, Heart, MoreVertical, Volume2 } from 'lucide-react-native'
 import { useTheme } from '../stores/useTheme'
 import { formatTime } from '../utils/format'
@@ -15,6 +16,21 @@ export function TrackItem({
 }) {
   const { theme, spacing, radii, typography } = useTheme()
 
+  const handlePress = () => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    } catch {}
+    onPress?.()
+  }
+
+  const handleToggle = (e) => {
+    e.stopPropagation()
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
+    } catch {}
+    onToggleFavorite?.(track)
+  }
+
   return (
     <TouchableOpacity
       style={[
@@ -25,7 +41,7 @@ export function TrackItem({
         }
       ]}
       activeOpacity={0.7}
-      onPress={onPress}
+      onPress={handlePress}
     >
       {/* Artwork or Icon */}
       <View
@@ -93,10 +109,7 @@ export function TrackItem({
         {onToggleFavorite && (
           <TouchableOpacity
             style={styles.actionIcon}
-            onPress={(e) => {
-              e.stopPropagation()
-              onToggleFavorite(track)
-            }}
+            onPress={handleToggle}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
             <Heart

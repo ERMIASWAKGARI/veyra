@@ -43,10 +43,28 @@ class PlaybackManagerSingleton {
         this._persistCurrentPosition()
       }
     }, 5000)
+
+    // Smooth real-time timer ticker (ticks every 250ms while playing)
+    this.lastPositionUpdate = Date.now()
+    this.playbackTicker = setInterval(() => {
+      if (this.currentState.isPlaying && this.currentState.duration > 0) {
+        const now = Date.now()
+        const elapsed = (now - this.lastPositionUpdate) * (this.currentState.speed || 1.0)
+        this.lastPositionUpdate = now
+        const newPos = Math.min(this.currentState.position + elapsed, this.currentState.duration)
+        if (Math.abs(newPos - this.currentState.position) >= 150) {
+          this.currentState.position = newPos
+          this._notifyListeners()
+        }
+      } else {
+        this.lastPositionUpdate = Date.now()
+      }
+    }, 250)
   }
 
   _handleEngineEvent(event, data) {
     if (event === 'onPlaybackStateChanged') {
+      this.lastPositionUpdate = Date.now()
       const activeMedia = data.currentMedia || this.currentState.currentMedia
       if (data.duration > 0 && activeMedia?.id) {
         if (!activeMedia.duration || activeMedia.duration === 0) {
@@ -60,10 +78,10 @@ class PlaybackManagerSingleton {
         isPlaying: data.isPlaying,
         playbackState: data.playbackState,
         position: data.position,
-        duration: data.duration,
-        speed: data.speed,
-        shuffleEnabled: data.shuffleEnabled,
-        repeatMode: data.repeatMode,
+        duration: data.duration || this.currentState.duration,
+        speed: data.speed ?? this.currentState.speed,
+        shuffleEnabled: data.shuffleEnabled ?? this.currentState.shuffleEnabled,
+        repeatMode: data.repeatMode ?? this.currentState.repeatMode,
         currentMedia: activeMedia
       }
       this._notifyListeners()

@@ -11,6 +11,7 @@ import {
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useVideoPlayer, VideoView } from 'expo-video'
+import * as Haptics from 'expo-haptics'
 import {
   ChevronLeft,
   Play,
@@ -43,8 +44,22 @@ export default function VideoPlayerScreen() {
   const [subtitleModalVisible, setSubtitleModalVisible] = useState(false)
   const [currentSpeed, setCurrentSpeed] = useState(1.0)
   const [selectedSubtitle, setSelectedSubtitle] = useState('Off')
+  const [showRemaining, setShowRemaining] = useState(false)
+
+  // Real-time video position and duration
+  const [videoPosMs, setVideoPosMs] = useState(0)
+  const [videoDurMs, setVideoDurMs] = useState(currentMedia?.duration || 0)
+  const [isVideoPlaying, setIsVideoPlaying] = useState(true)
+  const [isScrubbing, setIsScrubbing] = useState(false)
+  const [scrubPosMs, setScrubPosMs] = useState(0)
 
   const controlsTimeoutRef = useRef(null)
+
+  const triggerHaptic = (style = Haptics.ImpactFeedbackStyle.Light) => {
+    try {
+      Haptics.impactAsync(style)
+    } catch {}
+  }
 
   // Pause background audio when video player opens
   useEffect(() => {
@@ -57,8 +72,53 @@ export default function VideoPlayerScreen() {
     p.playbackRate = currentSpeed
     p.volume = 1.0
     p.muted = false
+    try {
+      p.timeUpdateEventInterval = 0.25
+    } catch {}
     p.play()
   })
+
+  // Listen to timeUpdate and playingChange for real-time timer
+  useEffect(() => {
+    if (!player) return
+
+    try {
+      player.timeUpdateEventInterval = 0.25
+    } catch {}
+
+    const subTime = player.addListener('timeUpdate', ({ currentTime }) => {
+      if (!isScrubbing) {
+        setVideoPosMs((currentTime || 0) * 1000)
+        if (player.duration && player.duration > 0) {
+          setVideoDurMs(player.duration * 1000)
+        }
+      }
+    })
+
+    const subPlaying = player.addListener('playingChange', ({ isPlaying }) => {
+      setIsVideoPlaying(isPlaying)
+    })
+
+    return () => {
+      try { subTime.remove() } catch {}
+      try { subPlaying.remove() } catch {}
+    }
+  }, [player, isScrubbing])
+
+  // Real-time fallback ticker while video is playing
+  useEffect(() => {
+    if (!isVideoPlaying || isScrubbing) return
+    const interval = setInterval(() => {
+      if (player) {
+        const cur = (player.currentTime || 0) * 1000
+        setVideoPosMs(cur)
+        if (player.duration > 0) {
+          setVideoDurMs(player.duration * 1000)
+        }
+      }
+    }, 250)
+    return () => clearInterval(interval)
+  }, [isVideoPlaying, isScrubbing, player])
 
   // Handle media switching
   useEffect(() => {
@@ -72,6 +132,8 @@ export default function VideoPlayerScreen() {
         player.volume = 1.0
         player.muted = false
         player.play()
+        setVideoPosMs(0)
+        setVideoDurMs(currentMedia.duration || 0)
       } catch (err) {
         console.warn('Video replace error:', err)
       }
@@ -93,6 +155,7 @@ export default function VideoPlayerScreen() {
       getPlaybackState(currentMedia.id).then((saved) => {
         if (saved && saved.position > 3000) {
           player.currentTime = saved.position / 1000
+          setVideoPosMs(saved.position)
         }
       })
     }
@@ -141,19 +204,24 @@ export default function VideoPlayerScreen() {
 
   const handleTogglePlay = () => {
     if (!player) return
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Medium)
     resetControlsTimer()
     if (player.playing) {
       player.pause()
+      setIsVideoPlaying(false)
     } else {
       player.play()
+      setIsVideoPlaying(true)
     }
   }
 
   const handleSeekBy = (deltaSeconds) => {
     if (!player) return
+    triggerHaptic()
     resetControlsTimer()
     const target = Math.max(0, Math.min((player.currentTime || 0) + deltaSeconds, player.duration || Infinity))
     player.currentTime = target
+    setVideoPosMs(target * 1000)
   }
 
   const handleSelectSpeed = (speed) => {
@@ -163,9 +231,9 @@ export default function VideoPlayerScreen() {
     }
   }
 
-  const curPosMs = (player?.currentTime || 0) * 1000
-  const durMs = (player?.duration || 0) * 1000
-  const progressRatio = durMs > 0 ? Math.min(1, Math.max(0, curPosMs / durMs)) : 0
+  const activePos = isScrubbing ? scrubPosMs : videoPosMs
+  const activeDur = videoDurMs > 0 ? videoDurMs : (currentMedia?.duration || 0)
+  const progressRatio = activeDur > 0 ? Math.min(1, Math.max(0, activePos / activeDur)) : 0
 
   return (
     <View style={styles.container}>
@@ -228,50 +296,100 @@ export default function VideoPlayerScreen() {
 
           {/* Center Transport Controls */}
           <View style={styles.centerControls}>
+            {/* Previous Video in Queue */}
+            <TouchableOpacity
+              style={styles.hudCircleBtn}
+              onPress={() => {
+                triggerHaptic(Haptics.ImpactFeedbackStyle.Medium)
+                resetControlsTimer()
+                skipToPrevious()
+              }}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            >
+              <SkipBack size={24} color="#FFFFFF" fill="#FFFFFF" />
+            </TouchableOpacity>
+
+            {/* Rewind -10s */}
             <TouchableOpacity
               style={styles.centerAction}
-              onPress={() => handleSeekBy(-10)}
+              onPress={() => {
+                triggerHaptic()
+                handleSeekBy(-10)
+              }}
             >
-              <RotateCcw size={32} color="#FFFFFF" />
+              <RotateCcw size={28} color="#FFFFFF" />
               <Text style={styles.seekBadge}>-10s</Text>
             </TouchableOpacity>
 
+            {/* Big Play / Pause Button */}
             <TouchableOpacity
               style={[styles.bigPlayBtn, { backgroundColor: theme.colors.accent }]}
               onPress={handleTogglePlay}
             >
-              {player?.playing ? (
+              {isVideoPlaying ? (
                 <Pause size={34} color="#FFFFFF" fill="#FFFFFF" />
               ) : (
                 <Play size={34} color="#FFFFFF" fill="#FFFFFF" style={{ marginLeft: 3 }} />
               )}
             </TouchableOpacity>
 
+            {/* Fast Forward +10s */}
             <TouchableOpacity
               style={styles.centerAction}
-              onPress={() => handleSeekBy(10)}
+              onPress={() => {
+                triggerHaptic()
+                handleSeekBy(10)
+              }}
             >
-              <RotateCw size={32} color="#FFFFFF" />
+              <RotateCw size={28} color="#FFFFFF" />
               <Text style={styles.seekBadge}>+10s</Text>
+            </TouchableOpacity>
+
+            {/* Next Video in Queue */}
+            <TouchableOpacity
+              style={styles.hudCircleBtn}
+              onPress={() => {
+                triggerHaptic(Haptics.ImpactFeedbackStyle.Medium)
+                resetControlsTimer()
+                skipToNext()
+              }}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            >
+              <SkipForward size={24} color="#FFFFFF" fill="#FFFFFF" />
             </TouchableOpacity>
           </View>
 
           {/* Bottom Bar Scrubber */}
           <View style={styles.bottomBar}>
             <View style={styles.timeRow}>
-              <Text style={styles.timeText}>{formatTime(curPosMs)}</Text>
-              <Text style={styles.timeText}>{formatTime(durMs)}</Text>
+              <Text style={styles.timeText}>{formatTime(activePos)}</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  triggerHaptic()
+                  setShowRemaining(!showRemaining)
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Text style={styles.timeText}>
+                  {showRemaining
+                    ? `-${formatTime(Math.max(0, activeDur - activePos))}`
+                    : formatTime(activeDur)}
+                </Text>
+              </TouchableOpacity>
             </View>
 
             <TouchableOpacity
               style={styles.scrubberTouch}
               activeOpacity={1}
               onPress={(e) => {
-                if (durMs > 0 && player) {
+                if (activeDur > 0 && player) {
                   const { locationX } = e.nativeEvent
                   const screenW = Dimensions.get('window').width - 48
                   const ratio = Math.max(0, Math.min(1, locationX / screenW))
-                  player.currentTime = (ratio * durMs) / 1000
+                  const targetSec = (ratio * activeDur) / 1000
+                  player.currentTime = targetSec
+                  setVideoPosMs(targetSec * 1000)
+                  triggerHaptic()
                   resetControlsTimer()
                 }
               }}
@@ -279,6 +397,17 @@ export default function VideoPlayerScreen() {
               <View style={styles.scrubberTrack}>
                 <View style={[styles.scrubberProgress, { width: `${progressRatio * 100}%`, backgroundColor: theme.colors.accent }]} />
               </View>
+              {/* Scrubber Thumb */}
+              <View
+                style={[
+                  styles.scrubberThumb,
+                  {
+                    left: `${Math.max(0, Math.min(97, progressRatio * 100))}%`,
+                    backgroundColor: '#FFFFFF',
+                    borderColor: theme.colors.accent
+                  }
+                ]}
+              />
             </TouchableOpacity>
           </View>
         </View>
@@ -375,18 +504,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 40
+    gap: 20
+  },
+  hudCircleBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    alignItems: 'center',
+    justifyContent: 'center'
   },
   centerAction: {
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 10
+    padding: 8
   },
   seekBadge: {
     color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 4
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 2
   },
   bigPlayBtn: {
     width: 72,
@@ -407,7 +544,7 @@ const styles = StyleSheet.create({
   timeText: {
     color: '#FFFFFF',
     fontSize: 12,
-    fontWeight: '500'
+    fontWeight: '600'
   },
   scrubberTouch: {
     height: 24,
@@ -421,6 +558,16 @@ const styles = StyleSheet.create({
   },
   scrubberProgress: {
     height: '100%'
+  },
+  scrubberThumb: {
+    position: 'absolute',
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 2,
+    top: 5,
+    marginLeft: -7,
+    elevation: 3
   },
   modalBackdrop: {
     flex: 1,

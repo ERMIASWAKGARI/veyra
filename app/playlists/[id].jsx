@@ -52,12 +52,14 @@ export default function PlaylistDetailScreen() {
   const handlePlayAll = () => {
     if (items.length === 0) return
     playMedia(items[0], items, 0)
+    router.push(items[0]?.type === 'video' ? '/player/video' : '/player/audio')
   }
 
   const handleShuffle = () => {
     if (items.length === 0) return
     const rand = Math.floor(Math.random() * items.length)
     playMedia(items[rand], items, rand)
+    router.push(items[rand]?.type === 'video' ? '/player/video' : '/player/audio')
   }
 
   return (
@@ -117,7 +119,10 @@ export default function PlaylistDetailScreen() {
             track={item}
             isActive={currentMedia?.id === item.id}
             isPlaying={isPlaying && currentMedia?.id === item.id}
-            onPress={() => playMedia(item, items, index)}
+            onPress={() => {
+              playMedia(item, items, index)
+              router.push(item.type === 'video' ? '/player/video' : '/player/audio')
+            }}
             onMorePress={() => handleRemoveItem(item)}
           />
         )}

@@ -1,5 +1,6 @@
 import React from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native'
+import * as Haptics from 'expo-haptics'
 import { Video as VideoIcon, Play, MoreVertical, Heart } from 'lucide-react-native'
 import { useTheme } from '../stores/useTheme'
 import { formatTime } from '../utils/format'
@@ -13,6 +14,21 @@ export function VideoCard({
   onMorePress
 }) {
   const { theme, spacing, radii, typography } = useTheme()
+
+  const handlePress = () => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    } catch {}
+    onPress?.()
+  }
+
+  const handleToggle = (e) => {
+    e.stopPropagation()
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
+    } catch {}
+    onToggleFavorite?.(video)
+  }
 
   const progressRatio =
     video.duration > 0 && resumePosition > 0
@@ -30,7 +46,7 @@ export function VideoCard({
         }
       ]}
       activeOpacity={0.8}
-      onPress={onPress}
+      onPress={handlePress}
     >
       {/* Thumbnail Banner */}
       <View style={[styles.thumbnailWrapper, { backgroundColor: theme.colors.surfaceElevated }]}>
@@ -99,10 +115,7 @@ export function VideoCard({
           {onToggleFavorite && (
             <TouchableOpacity
               style={styles.actionBtn}
-              onPress={(e) => {
-                e.stopPropagation()
-                onToggleFavorite(video)
-              }}
+              onPress={handleToggle}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
               <Heart

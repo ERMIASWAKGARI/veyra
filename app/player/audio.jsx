@@ -1,14 +1,16 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   Image,
-  Dimensions
+  Dimensions,
+  PanResponder
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import * as Haptics from 'expo-haptics'
 import {
   ChevronDown,
   Heart,
@@ -35,7 +37,7 @@ import { SpeedModal } from '../../src/components/SpeedModal'
 import { SleepTimerModal } from '../../src/components/SleepTimerModal'
 
 const { width } = Dimensions.get('window')
-const ARTWORK_SIZE = Math.min(width - 64, 340)
+const ARTWORK_SIZE = Math.min(width - 64, 330)
 
 export default function AudioPlayerScreen() {
   const router = useRouter()
@@ -49,6 +51,8 @@ export default function AudioPlayerScreen() {
     speed,
     shuffleEnabled,
     repeatMode,
+    queue,
+    currentIndex,
     togglePlayPause,
     seekTo,
     seekBy,
@@ -64,10 +68,38 @@ export default function AudioPlayerScreen() {
   const [queueModalVisible, setQueueModalVisible] = useState(false)
   const [speedModalVisible, setSpeedModalVisible] = useState(false)
   const [sleepTimerVisible, setSleepTimerVisible] = useState(false)
+  const [showRemaining, setShowRemaining] = useState(false)
 
-  // Track scrubber drag state
+  // Track real-time smoothed position
+  const [displayPos, setDisplayPos] = useState(position || 0)
   const [isScrubbing, setIsScrubbing] = useState(false)
   const [scrubPosition, setScrubPosition] = useState(0)
+
+  const triggerHaptic = (style = Haptics.ImpactFeedbackStyle.Light) => {
+    try {
+      Haptics.impactAsync(style)
+    } catch {}
+  }
+
+  useEffect(() => {
+    if (!isScrubbing) {
+      setDisplayPos(position || 0)
+    }
+  }, [position, isScrubbing])
+
+  // Real-time ticking counter while playing
+  useEffect(() => {
+    if (!isPlaying || isScrubbing) return
+    const timer = setInterval(() => {
+      setDisplayPos((prev) => {
+        if (duration > 0 && prev < duration) {
+          return Math.min(prev + 250 * (speed || 1.0), duration)
+        }
+        return prev
+      })
+    }, 250)
+    return () => clearInterval(timer)
+  }, [isPlaying, isScrubbing, duration, speed])
 
   useEffect(() => {
     if (currentMedia?.id) {
@@ -77,12 +109,46 @@ export default function AudioPlayerScreen() {
 
   const handleToggleFavorite = async () => {
     if (!currentMedia?.id) return
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Medium)
     const newState = await toggleFavorite(currentMedia.id, 'audio')
     setIsFav(newState)
   }
 
-  const currentPos = isScrubbing ? scrubPosition : position
+  const currentPos = isScrubbing ? scrubPosition : displayPos
   const progressRatio = duration > 0 ? Math.min(1, Math.max(0, currentPos / duration)) : 0
+
+  // Drag scrubber PanResponder
+  const scrubberWidth = width - 48
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (evt) => {
+        setIsScrubbing(true)
+        triggerHaptic()
+        const locationX = evt.nativeEvent.locationX
+        const ratio = Math.max(0, Math.min(1, locationX / scrubberWidth))
+        setScrubPosition(ratio * (duration || 0))
+      },
+      onPanResponderMove: (evt) => {
+        const locationX = evt.nativeEvent.locationX
+        const ratio = Math.max(0, Math.min(1, locationX / scrubberWidth))
+        setScrubPosition(ratio * (duration || 0))
+      },
+      onPanResponderRelease: (evt) => {
+        const locationX = evt.nativeEvent.locationX
+        const ratio = Math.max(0, Math.min(1, locationX / scrubberWidth))
+        const targetMs = ratio * (duration || 0)
+        seekTo(targetMs)
+        setDisplayPos(targetMs)
+        setIsScrubbing(false)
+        triggerHaptic(Haptics.ImpactFeedbackStyle.Medium)
+      },
+      onPanResponderTerminate: () => {
+        setIsScrubbing(false)
+      }
+    })
+  ).current
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.playerBackground, paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 20) }]}>
@@ -90,23 +156,29 @@ export default function AudioPlayerScreen() {
       <View style={styles.topBar}>
         <TouchableOpacity
           style={[styles.iconButton, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full }]}
-          onPress={() => router.back()}
+          onPress={() => {
+            triggerHaptic()
+            router.back()
+          }}
         >
           <ChevronDown size={22} color={theme.colors.textPrimary} />
         </TouchableOpacity>
 
         <View style={styles.headerTitleContainer}>
           <Text style={[styles.headerSubtitle, { color: theme.colors.textMuted }]}>
-            PLAYING FROM LIBRARY
+            NOW PLAYING
           </Text>
           <Text numberOfLines={1} style={[styles.headerAlbum, { color: theme.colors.textSecondary }]}>
-            {currentMedia?.album || 'Unknown Album'}
+            {currentMedia?.album || 'Single / Local Audio'}
           </Text>
         </View>
 
         <TouchableOpacity
           style={[styles.iconButton, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full }]}
-          onPress={() => setSleepTimerVisible(true)}
+          onPress={() => {
+            triggerHaptic()
+            setSleepTimerVisible(true)
+          }}
         >
           <Moon
             size={18}
@@ -182,19 +254,9 @@ export default function AudioPlayerScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Scrubber Progress Bar */}
+      {/* Real-time Scrubber Progress Bar */}
       <View style={styles.scrubberArea}>
-        <TouchableOpacity
-          style={styles.scrubberTrackWrapper}
-          activeOpacity={1}
-          onPress={(e) => {
-            if (duration > 0) {
-              const { locationX } = e.nativeEvent
-              const newRatio = Math.max(0, Math.min(1, locationX / (width - 48)))
-              seekTo(newRatio * duration)
-            }
-          }}
-        >
+        <View style={styles.scrubberTrackWrapper} {...panResponder.panHandlers}>
           <View style={[styles.scrubberTrack, { backgroundColor: theme.colors.surfaceHighlight, borderRadius: radii.full }]}>
             <View
               style={[
@@ -203,114 +265,174 @@ export default function AudioPlayerScreen() {
               ]}
             />
           </View>
-        </TouchableOpacity>
+          {/* Scrubber Thumb */}
+          <View
+            style={[
+              styles.scrubberThumb,
+              {
+                left: `${Math.max(0, Math.min(97, progressRatio * 100))}%`,
+                backgroundColor: '#FFFFFF',
+                borderColor: theme.colors.accent,
+                shadowColor: theme.colors.accent
+              }
+            ]}
+          />
+        </View>
 
+        {/* Real-time Timers (Counting minutes, seconds) */}
         <View style={styles.timeRow}>
-          <Text style={[styles.timeText, { color: theme.colors.textMuted }]}>
+          <Text style={[styles.timeText, { color: theme.colors.accentLight }]}>
             {formatTime(currentPos)}
           </Text>
-          <Text style={[styles.timeText, { color: theme.colors.textMuted }]}>
-            {formatTime(duration)}
-          </Text>
+          <TouchableOpacity
+            onPress={() => {
+              triggerHaptic()
+              setShowRemaining(!showRemaining)
+            }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Text style={[styles.timeText, { color: theme.colors.textMuted }]}>
+              {showRemaining
+                ? `-${formatTime(Math.max(0, duration - currentPos))}`
+                : formatTime(duration)}
+            </Text>
+          </TouchableOpacity>
         </View>
       </View>
 
-      {/* Main Transport Controls */}
+      {/* Primary Transport Controls with Prominent Next & Prev Buttons */}
       <View style={styles.controlsRow}>
         {/* Shuffle */}
         <TouchableOpacity
           style={styles.secondaryControl}
-          onPress={toggleShuffle}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          onPress={() => {
+            triggerHaptic()
+            toggleShuffle()
+          }}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
           <Shuffle
-            size={20}
+            size={22}
             color={shuffleEnabled ? theme.colors.accentLight : theme.colors.textMuted}
           />
         </TouchableOpacity>
 
-        {/* Seek -10s */}
+        {/* Prominent Previous Track Button */}
         <TouchableOpacity
-          style={styles.secondaryControl}
-          onPress={() => seekBy(-10)}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          style={[styles.mainControl, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full }]}
+          onPress={() => {
+            triggerHaptic(Haptics.ImpactFeedbackStyle.Medium)
+            skipToPrevious()
+          }}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
-          <RotateCcw size={22} color={theme.colors.textPrimary} />
+          <SkipBack size={26} color={theme.colors.textPrimary} fill={theme.colors.textPrimary} />
         </TouchableOpacity>
 
-        {/* Skip Previous */}
+        {/* Large Play / Pause Button with Glow */}
         <TouchableOpacity
-          style={styles.mainControl}
-          onPress={skipToPrevious}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <SkipBack size={28} color={theme.colors.textPrimary} fill={theme.colors.textPrimary} />
-        </TouchableOpacity>
-
-        {/* Big Play / Pause Button */}
-        <TouchableOpacity
-          style={[styles.playButton, { backgroundColor: theme.colors.accent, borderRadius: radii.full }]}
-          onPress={togglePlayPause}
+          style={[
+            styles.playButton,
+            {
+              backgroundColor: theme.colors.accent,
+              borderRadius: radii.full,
+              shadowColor: theme.colors.accent,
+              shadowOpacity: 0.45,
+              shadowRadius: 12,
+              elevation: 8
+            }
+          ]}
+          onPress={() => {
+            triggerHaptic(Haptics.ImpactFeedbackStyle.Medium)
+            togglePlayPause()
+          }}
           activeOpacity={0.85}
         >
           {isPlaying ? (
-            <Pause size={30} color="#FFFFFF" fill="#FFFFFF" />
+            <Pause size={32} color="#FFFFFF" fill="#FFFFFF" />
           ) : (
-            <Play size={30} color="#FFFFFF" fill="#FFFFFF" style={{ marginLeft: 3 }} />
+            <Play size={32} color="#FFFFFF" fill="#FFFFFF" style={{ marginLeft: 3 }} />
           )}
         </TouchableOpacity>
 
-        {/* Skip Next */}
+        {/* Prominent Next Track Button */}
         <TouchableOpacity
-          style={styles.mainControl}
-          onPress={skipToNext}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          style={[styles.mainControl, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full }]}
+          onPress={() => {
+            triggerHaptic(Haptics.ImpactFeedbackStyle.Medium)
+            skipToNext()
+          }}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
-          <SkipForward size={28} color={theme.colors.textPrimary} fill={theme.colors.textPrimary} />
-        </TouchableOpacity>
-
-        {/* Seek +10s */}
-        <TouchableOpacity
-          style={styles.secondaryControl}
-          onPress={() => seekBy(10)}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <RotateCw size={22} color={theme.colors.textPrimary} />
+          <SkipForward size={26} color={theme.colors.textPrimary} fill={theme.colors.textPrimary} />
         </TouchableOpacity>
 
         {/* Repeat Mode */}
         <TouchableOpacity
           style={styles.secondaryControl}
-          onPress={cycleRepeatMode}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          onPress={() => {
+            triggerHaptic()
+            cycleRepeatMode()
+          }}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
           {repeatMode === 1 ? (
-            <Repeat1 size={20} color={theme.colors.accentLight} />
+            <Repeat1 size={22} color={theme.colors.accentLight} />
           ) : (
             <Repeat
-              size={20}
+              size={22}
               color={repeatMode === 2 ? theme.colors.accentLight : theme.colors.textMuted}
             />
           )}
         </TouchableOpacity>
       </View>
 
-      {/* Bottom Utility Controls (Queue & Speed) */}
-      <View style={styles.bottomBar}>
+      {/* Secondary Fast Seek & Utility Controls */}
+      <View style={styles.secondaryActionsRow}>
+        <TouchableOpacity
+          style={[styles.seekPill, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full }]}
+          onPress={() => {
+            triggerHaptic()
+            seekBy(-10)
+          }}
+        >
+          <RotateCcw size={16} color={theme.colors.textPrimary} />
+          <Text style={[styles.seekPillText, { color: theme.colors.textPrimary }]}>-10s</Text>
+        </TouchableOpacity>
+
         <TouchableOpacity
           style={[styles.utilityBtn, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full }]}
-          onPress={() => setSpeedModalVisible(true)}
+          onPress={() => {
+            triggerHaptic()
+            setSpeedModalVisible(true)
+          }}
         >
-          <Gauge size={16} color={theme.colors.textSecondary} />
+          <Gauge size={15} color={theme.colors.accentLight} />
           <Text style={[styles.utilityText, { color: theme.colors.textPrimary }]}>{speed}x</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.utilityBtn, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full }]}
-          onPress={() => setQueueModalVisible(true)}
+          onPress={() => {
+            triggerHaptic()
+            setQueueModalVisible(true)
+          }}
         >
-          <ListMusic size={16} color={theme.colors.textSecondary} />
-          <Text style={[styles.utilityText, { color: theme.colors.textPrimary }]}>Queue</Text>
+          <ListMusic size={15} color={theme.colors.accentLight} />
+          <Text style={[styles.utilityText, { color: theme.colors.textPrimary }]}>
+            {queue.length > 0 ? `${(currentIndex >= 0 ? currentIndex + 1 : 1)}/${queue.length}` : 'Queue'}
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.seekPill, { backgroundColor: theme.colors.surfaceElevated, borderRadius: radii.full }]}
+          onPress={() => {
+            triggerHaptic()
+            seekBy(10)
+          }}
+        >
+          <RotateCw size={16} color={theme.colors.textPrimary} />
+          <Text style={[styles.seekPillText, { color: theme.colors.textPrimary }]}>+10s</Text>
         </TouchableOpacity>
       </View>
 
@@ -320,13 +442,10 @@ export default function AudioPlayerScreen() {
         visible={speedModalVisible}
         currentSpeed={speed}
         isVideo={false}
-        onSelectSpeed={setPlaybackSpeed}
+        onSelectSpeed={(s) => setPlaybackSpeed(s)}
         onClose={() => setSpeedModalVisible(false)}
       />
-      <SleepTimerModal
-        visible={sleepTimerVisible}
-        onClose={() => setSleepTimerVisible(false)}
-      />
+      <SleepTimerModal visible={sleepTimerVisible} onClose={() => setSleepTimerVisible(false)} />
     </View>
   )
 }
@@ -416,50 +535,75 @@ const styles = StyleSheet.create({
   scrubberFill: {
     height: '100%'
   },
+  scrubberThumb: {
+    position: 'absolute',
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 2,
+    top: 5,
+    marginLeft: -7,
+    elevation: 3
+  },
   timeRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: -4
+    marginTop: 2
   },
   timeText: {
     fontSize: 12,
-    fontWeight: '500'
+    fontWeight: '600'
   },
   controlsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginVertical: 12
+    marginVertical: 8,
+    paddingHorizontal: 8
   },
   secondaryControl: {
-    padding: 8
+    padding: 10
   },
   mainControl: {
-    padding: 8
+    width: 48,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center'
   },
   playButton: {
-    width: 68,
-    height: 68,
+    width: 70,
+    height: 70,
     alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 4
+    justifyContent: 'center'
   },
-  bottomBar: {
+  secondaryActionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 16,
-    paddingTop: 8
+    gap: 12,
+    paddingTop: 4,
+    paddingBottom: 8
+  },
+  seekPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 7
+  },
+  seekPillText: {
+    fontSize: 12,
+    fontWeight: '600'
   },
   utilityBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 8
+    paddingHorizontal: 14,
+    paddingVertical: 7
   },
   utilityText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600'
   }
 })

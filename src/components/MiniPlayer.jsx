@@ -1,7 +1,7 @@
 import React from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native'
 import { useRouter, usePathname } from 'expo-router'
-import { Play, Pause, SkipForward, Music } from 'lucide-react-native'
+import { Play, Pause, SkipBack, SkipForward, Music } from 'lucide-react-native'
 import { usePlayback } from '../stores/usePlayback'
 import { useTheme } from '../stores/useTheme'
 import { truncateText } from '../utils/format'
@@ -10,7 +10,7 @@ export function MiniPlayer() {
   const router = useRouter()
   const pathname = usePathname()
   const { theme, spacing, radii, typography } = useTheme()
-  const { currentMedia, isPlaying, togglePlayPause, skipToNext, position, duration } = usePlayback()
+  const { currentMedia, isPlaying, togglePlayPause, skipToNext, skipToPrevious, position, duration } = usePlayback()
 
   // Do not show mini-player if no media is loaded or if already on the full player screen
   if (!currentMedia || pathname.startsWith('/player')) {
@@ -79,6 +79,17 @@ export function MiniPlayer() {
         {/* Transport Controls */}
         <View style={styles.controls}>
           <TouchableOpacity
+            style={styles.controlButton}
+            onPress={(e) => {
+              e.stopPropagation()
+              skipToPrevious()
+            }}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <SkipBack size={18} color={theme.colors.textPrimary} fill={theme.colors.textPrimary} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
             style={[styles.controlButton, { backgroundColor: theme.colors.accentSubtle, borderRadius: radii.full }]}
             onPress={(e) => {
               e.stopPropagation()
@@ -89,7 +100,7 @@ export function MiniPlayer() {
             {isPlaying ? (
               <Pause size={18} color={theme.colors.accent} fill={theme.colors.accent} />
             ) : (
-              <Play size={18} color={theme.colors.accent} fill={theme.colors.accent} />
+              <Play size={18} color={theme.colors.accent} fill={theme.colors.accent} style={{ marginLeft: 2 }} />
             )}
           </TouchableOpacity>
 
@@ -101,7 +112,7 @@ export function MiniPlayer() {
             }}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <SkipForward size={20} color={theme.colors.textPrimary} />
+            <SkipForward size={18} color={theme.colors.textPrimary} fill={theme.colors.textPrimary} />
           </TouchableOpacity>
         </View>
       </TouchableOpacity>

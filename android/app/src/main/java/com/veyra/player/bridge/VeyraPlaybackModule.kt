@@ -32,6 +32,8 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var mediaController: MediaController? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var progressTrackingRunnable: Runnable? = null
+    private val PROGRESS_UPDATE_INTERVAL_MS = 250L
 
     override fun getName(): String = "VeyraPlayback"
 
@@ -39,6 +41,27 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
         mainHandler.post {
             initializeController()
         }
+    }
+
+    private fun startProgressTracking() {
+        stopProgressTracking()
+        progressTrackingRunnable = object : Runnable {
+            override fun run() {
+                val controller = mediaController
+                if (controller != null && controller.isPlaying) {
+                    emitPlaybackState()
+                    mainHandler.postDelayed(this, PROGRESS_UPDATE_INTERVAL_MS)
+                } else {
+                    stopProgressTracking()
+                }
+            }
+        }
+        mainHandler.post(progressTrackingRunnable!!)
+    }
+
+    private fun stopProgressTracking() {
+        progressTrackingRunnable?.let { mainHandler.removeCallbacks(it) }
+        progressTrackingRunnable = null
     }
 
     private fun initializeController() {
@@ -51,6 +74,9 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
             try {
                 mediaController = controllerFuture?.get()
                 setupControllerListener()
+                if (mediaController?.isPlaying == true) {
+                    startProgressTracking()
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -60,10 +86,18 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
     private fun setupControllerListener() {
         mediaController?.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) {
+                    startProgressTracking()
+                } else {
+                    stopProgressTracking()
+                }
                 emitPlaybackState()
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED || playbackState == Player.STATE_IDLE) {
+                    stopProgressTracking()
+                }
                 emitPlaybackState()
             }
 
@@ -358,5 +392,12 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun removeListeners(count: Int) {
         // Keep React Native happy for native event emitters
+    }
+
+    override fun onCatalystInstanceDestroy() {
+        stopProgressTracking()
+        mediaController?.release()
+        mediaController = null
+        super.onCatalystInstanceDestroy()
     }
 }
