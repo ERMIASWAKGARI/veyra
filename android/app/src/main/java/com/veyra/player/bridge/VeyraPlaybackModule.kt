@@ -2,6 +2,7 @@ package com.veyra.player.bridge
 
 import android.content.ComponentName
 import android.net.Uri
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import androidx.media3.common.C
@@ -12,6 +13,7 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import androidx.media3.session.SessionCommand
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -33,7 +35,8 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
     private var mediaController: MediaController? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private var progressTrackingRunnable: Runnable? = null
-    private val PROGRESS_UPDATE_INTERVAL_MS = 250L
+    private val PROGRESS_UPDATE_INTERVAL_MS = 500L
+    private var progressUpdatesEnabled = false
 
     override fun getName(): String = "VeyraPlayback"
 
@@ -48,8 +51,8 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
         progressTrackingRunnable = object : Runnable {
             override fun run() {
                 val controller = mediaController
-                if (controller != null && controller.isPlaying) {
-                    emitPlaybackState()
+                if (progressUpdatesEnabled && controller != null && controller.isPlaying) {
+                    emitProgress()
                     mainHandler.postDelayed(this, PROGRESS_UPDATE_INTERVAL_MS)
                 } else {
                     stopProgressTracking()
@@ -74,7 +77,7 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
             try {
                 mediaController = controllerFuture?.get()
                 setupControllerListener()
-                if (mediaController?.isPlaying == true) {
+                if (progressUpdatesEnabled && mediaController?.isPlaying == true) {
                     startProgressTracking()
                 }
             } catch (e: Exception) {
@@ -86,7 +89,7 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
     private fun setupControllerListener() {
         mediaController?.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (isPlaying) {
+                if (isPlaying && progressUpdatesEnabled) {
                     startProgressTracking()
                 } else {
                     stopProgressTracking()
@@ -103,12 +106,22 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 emitMediaChanged(mediaItem)
+                emitQueueChanged()
                 emitPlaybackState()
             }
 
             override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
                 emitQueueChanged()
             }
+
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                emitPlaybackState()
+                emitQueueChanged()
+            }
+
+            override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) { emitPlaybackState() }
+            override fun onRepeatModeChanged(repeatMode: Int) { emitPlaybackState() }
+            override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) { emitPlaybackState() }
 
             override fun onPlayerError(error: PlaybackException) {
                 val params = Arguments.createMap().apply {
@@ -128,6 +141,24 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    private fun emitProgress() {
+        val controller = mediaController ?: return
+        sendEvent("onPlaybackProgress", Arguments.createMap().apply {
+            putString("mediaId", controller.currentMediaItem?.mediaId)
+            putDouble("position", controller.currentPosition.toDouble())
+            putDouble("duration", controller.duration.coerceAtLeast(0L).toDouble())
+        })
+    }
+
+    @ReactMethod
+    fun setProgressUpdatesEnabled(enabled: Boolean) {
+        mainHandler.post {
+            progressUpdatesEnabled = enabled
+            if (enabled && mediaController?.isPlaying == true) startProgressTracking()
+            else stopProgressTracking()
+        }
+    }
+
     private fun emitPlaybackState() {
         val controller = mediaController ?: return
         val currentItem = controller.currentMediaItem
@@ -141,6 +172,7 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
             putDouble("speed", controller.playbackParameters.speed.toDouble())
             putBoolean("shuffleEnabled", controller.shuffleModeEnabled)
             putInt("repeatMode", controller.repeatMode)
+            putInt("currentIndex", controller.currentMediaItemIndex)
             if (currentItem != null) {
                 putMap("currentMedia", mediaItemToWritableMap(currentItem))
             } else {
@@ -180,11 +212,14 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
         val metadata = item.mediaMetadata
         return Arguments.createMap().apply {
             putString("id", item.mediaId)
-            putString("uri", item.localConfiguration?.uri?.toString() ?: "")
+            putString("uri", item.localConfiguration?.uri?.toString() ?: metadata.extras?.getString("veyra.uri") ?: "")
             putString("title", metadata.title?.toString() ?: "")
             putString("artist", metadata.artist?.toString() ?: "")
             putString("album", metadata.albumTitle?.toString() ?: "")
             putString("artworkUri", metadata.artworkUri?.toString() ?: "")
+            putString("type", metadata.extras?.getString("veyra.type") ?: "audio")
+            putDouble("duration", metadata.extras?.getDouble("veyra.duration") ?: 0.0)
+            putString("folder", metadata.extras?.getString("veyra.folder") ?: "")
         }
     }
 
@@ -200,6 +235,12 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
             .setTitle(title)
             .setArtist(artist)
             .setAlbumTitle(album)
+            .setExtras(Bundle().apply {
+                putString("veyra.uri", uriStr)
+                putString("veyra.type", if (map.hasKey("type")) map.getString("type") else "audio")
+                putDouble("veyra.duration", if (map.hasKey("duration") && !map.isNull("duration")) map.getDouble("duration") else 0.0)
+                putString("veyra.folder", if (map.hasKey("folder")) map.getString("folder") else "")
+            })
 
         if (!artworkUriStr.isNullOrEmpty()) {
             metadataBuilder.setArtworkUri(Uri.parse(artworkUriStr))
@@ -212,22 +253,30 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
             .build()
     }
 
-    private fun withController(action: (MediaController) -> Unit) {
-        val current = mediaController
-        if (current != null) {
-            mainHandler.post { action(current) }
-        } else {
-            val future = controllerFuture
-            if (future != null) {
-                future.addListener({
-                    try {
-                        val controller = mediaController ?: future.get()
-                        mediaController = controller
-                        if (controller != null) {
-                            mainHandler.post { action(controller) }
+    private fun withController(promise: Promise? = null, resolveResult: Boolean = true, action: (MediaController) -> Unit) {
+        mainHandler.post {
+            val runAction: (MediaController) -> Unit = { controller ->
+                try {
+                    action(controller)
+                    if (resolveResult) promise?.resolve(null)
+                } catch (e: Exception) {
+                    promise?.reject("PLAYBACK_ERROR", e.message, e)
+                }
+            }
+            val controller = mediaController
+            if (controller != null) runAction(controller)
+            else {
+                val future = controllerFuture
+                if (future == null) promise?.reject("UNAVAILABLE", "Playback service unavailable")
+                else future.addListener({
+                    mainHandler.post {
+                        try {
+                            val connected = future.get()
+                            mediaController = connected
+                            runAction(connected)
+                        } catch (e: Exception) {
+                            promise?.reject("UNAVAILABLE", e.message, e)
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
                     }
                 }, MoreExecutors.directExecutor())
             }
@@ -237,8 +286,8 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
     // ---------------- React Methods ----------------
 
     @ReactMethod
-    fun play(mediaMap: ReadableMap) {
-        withController { controller ->
+    fun play(mediaMap: ReadableMap, promise: Promise) {
+        withController(promise) { controller ->
             val item = buildMediaItem(mediaMap)
             controller.setMediaItem(item)
             controller.prepare()
@@ -247,50 +296,50 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun pause() {
-        withController { controller ->
+    fun pause(promise: Promise) {
+        withController(promise) { controller ->
             controller.pause()
         }
     }
 
     @ReactMethod
-    fun resume() {
-        withController { controller ->
+    fun resume(promise: Promise) {
+        withController(promise) { controller ->
             controller.play()
         }
     }
 
     @ReactMethod
-    fun stop() {
-        withController { controller ->
+    fun stop(promise: Promise) {
+        withController(promise) { controller ->
             controller.stop()
         }
     }
 
     @ReactMethod
-    fun seekTo(positionMs: Double) {
-        withController { controller ->
+    fun seekTo(positionMs: Double, promise: Promise) {
+        withController(promise) { controller ->
             controller.seekTo(positionMs.toLong())
         }
     }
 
     @ReactMethod
-    fun skipToNext() {
-        withController { controller ->
+    fun skipToNext(promise: Promise) {
+        withController(promise) { controller ->
             controller.seekToNextMediaItem()
         }
     }
 
     @ReactMethod
-    fun skipToPrevious() {
-        withController { controller ->
+    fun skipToPrevious(promise: Promise) {
+        withController(promise) { controller ->
             controller.seekToPreviousMediaItem()
         }
     }
 
     @ReactMethod
-    fun setQueue(items: ReadableArray, startIndex: Int) {
-        withController { controller ->
+    fun setQueue(items: ReadableArray, startIndex: Int, promise: Promise) {
+        withController(promise) { controller ->
             val mediaItems = ArrayList<MediaItem>(items.size())
             for (i in 0 until items.size()) {
                 val map = items.getMap(i)
@@ -305,23 +354,23 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun addToQueue(itemMap: ReadableMap) {
-        withController { controller ->
+    fun addToQueue(itemMap: ReadableMap, promise: Promise) {
+        withController(promise) { controller ->
             controller.addMediaItem(buildMediaItem(itemMap))
         }
     }
 
     @ReactMethod
-    fun addNext(itemMap: ReadableMap) {
-        withController { controller ->
+    fun addNext(itemMap: ReadableMap, promise: Promise) {
+        withController(promise) { controller ->
             val currentIndex = controller.currentMediaItemIndex
             controller.addMediaItem(currentIndex + 1, buildMediaItem(itemMap))
         }
     }
 
     @ReactMethod
-    fun removeFromQueue(index: Int) {
-        withController { controller ->
+    fun removeFromQueue(index: Int, promise: Promise) {
+        withController(promise) { controller ->
             if (index in 0 until controller.mediaItemCount) {
                 controller.removeMediaItem(index)
             }
@@ -330,57 +379,64 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun setShuffleMode(enabled: Boolean) {
-        mainHandler.post {
-            mediaController?.shuffleModeEnabled = enabled
-        }
+        withController { controller -> controller.shuffleModeEnabled = enabled }
     }
 
     @ReactMethod
     fun setRepeatMode(mode: Int) {
-        mainHandler.post {
+        withController { controller ->
             val repeatMode = when (mode) {
                 1 -> Player.REPEAT_MODE_ONE
                 2 -> Player.REPEAT_MODE_ALL
                 else -> Player.REPEAT_MODE_OFF
             }
-            mediaController?.repeatMode = repeatMode
+            controller.repeatMode = repeatMode
         }
     }
 
     @ReactMethod
     fun setPlaybackSpeed(speed: Double) {
-        mainHandler.post {
-            val currentParams = mediaController?.playbackParameters ?: PlaybackParameters.DEFAULT
-            mediaController?.playbackParameters = currentParams.withSpeed(speed.toFloat())
+        withController { controller ->
+            controller.playbackParameters = controller.playbackParameters.withSpeed(speed.toFloat())
         }
     }
 
     @ReactMethod
     fun getPlaybackState(promise: Promise) {
-        mainHandler.post {
-            val controller = mediaController
-            if (controller == null) {
-                promise.reject("UNAVAILABLE", "MediaController not initialized")
-                return@post
-            }
-            val currentItem = controller.currentMediaItem
-            val durationMs = if (controller.duration > 0) controller.duration else 0L
-
-            val stateMap = Arguments.createMap().apply {
+        withController(promise, false) { controller ->
+            val queue = Arguments.createArray()
+            for (i in 0 until controller.mediaItemCount) queue.pushMap(mediaItemToWritableMap(controller.getMediaItemAt(i)))
+            promise.resolve(Arguments.createMap().apply {
                 putBoolean("isPlaying", controller.isPlaying)
                 putInt("playbackState", controller.playbackState)
                 putDouble("position", controller.currentPosition.toDouble())
-                putDouble("duration", durationMs.toDouble())
+                putDouble("duration", controller.duration.coerceAtLeast(0L).toDouble())
                 putDouble("speed", controller.playbackParameters.speed.toDouble())
                 putBoolean("shuffleEnabled", controller.shuffleModeEnabled)
                 putInt("repeatMode", controller.repeatMode)
-                if (currentItem != null) {
-                    putMap("currentMedia", mediaItemToWritableMap(currentItem))
-                } else {
-                    putNull("currentMedia")
-                }
-            }
-            promise.resolve(stateMap)
+                putInt("currentIndex", controller.currentMediaItemIndex)
+                putArray("queue", queue)
+                val item = controller.currentMediaItem
+                if (item != null) putMap("currentMedia", mediaItemToWritableMap(item)) else putNull("currentMedia")
+            })
+        }
+    }
+
+    @ReactMethod
+    fun setAutoplayEnabled(enabled: Boolean) {
+        withController { controller ->
+            controller.sendCustomCommand(SessionCommand(VeyraMediaService.COMMAND_CONFIGURE, Bundle.EMPTY), Bundle().apply {
+                putBoolean("autoplayNext", enabled)
+            })
+        }
+    }
+
+    @ReactMethod
+    fun setSleepTimer(durationMs: Double) {
+        withController { controller ->
+            controller.sendCustomCommand(SessionCommand(VeyraMediaService.COMMAND_CONFIGURE, Bundle.EMPTY), Bundle().apply {
+                putLong("sleepDurationMs", durationMs.toLong())
+            })
         }
     }
 
@@ -394,10 +450,10 @@ class VeyraPlaybackModule(private val reactContext: ReactApplicationContext) :
         // Keep React Native happy for native event emitters
     }
 
-    override fun onCatalystInstanceDestroy() {
+    override fun invalidate() {
         stopProgressTracking()
-        mediaController?.release()
+        controllerFuture?.let { MediaController.releaseFuture(it) }
         mediaController = null
-        super.onCatalystInstanceDestroy()
+        super.invalidate()
     }
 }

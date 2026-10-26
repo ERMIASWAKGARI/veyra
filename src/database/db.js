@@ -35,10 +35,7 @@ export function getDatabase() {
 
 // ----------------- Media Items Repository -----------------
 
-export async function upsertMediaItem(item) {
-  if (Platform.OS === 'web') return webDb.upsertMediaItem(item)
-  const db = await getDatabase()
-  const sql = `
+const MEDIA_UPSERT_SQL = `
     INSERT INTO media_items (
       id, uri, type, title, artist, album, albumArtist, genre,
       duration, size, mimeType, year, trackNumber, discNumber,
@@ -50,17 +47,20 @@ export async function upsertMediaItem(item) {
       album=excluded.album,
       albumArtist=excluded.albumArtist,
       genre=excluded.genre,
-      duration=excluded.duration,
+      duration=CASE WHEN excluded.duration > 0 THEN excluded.duration ELSE media_items.duration END,
       size=excluded.size,
       mimeType=excluded.mimeType,
       year=excluded.year,
       trackNumber=excluded.trackNumber,
       discNumber=excluded.discNumber,
-      artworkUri=excluded.artworkUri,
+      artworkUri=COALESCE(excluded.artworkUri, media_items.artworkUri),
       folder=excluded.folder,
-      dateModified=excluded.dateModified;
+      dateModified=excluded.dateModified
+    WHERE media_items.dateModified IS NOT excluded.dateModified;
   `
-  await db.runAsync(sql, [
+
+function mediaParams(item) {
+  return [
     item.id,
     item.uri,
     item.type,
@@ -79,19 +79,31 @@ export async function upsertMediaItem(item) {
     item.folder || null,
     item.dateAdded || Date.now(),
     item.dateModified || Date.now()
-  ])
+  ]
+}
+
+export async function upsertMediaItem(item) {
+  if (Platform.OS === 'web') return webDb.upsertMediaItem(item)
+  const db = await getDatabase()
+  await db.runAsync(MEDIA_UPSERT_SQL, mediaParams(item))
 }
 
 export async function upsertMediaItemsBatch(items) {
-  if (!items || items.length === 0) return
+  if (!items?.length) return
   if (Platform.OS === 'web') return webDb.upsertMediaItemsBatch(items)
   const db = await getDatabase()
-  for (const item of items) {
-    try {
-      await upsertMediaItem(item)
-    } catch (err) {
-      console.warn('Upsert single item failed:', item?.title, err?.message || err)
-    }
+  // Commit small batches and reuse one prepared statement per transaction.
+  for (let start = 0; start < items.length; start += 100) {
+    await db.withExclusiveTransactionAsync(async (transaction) => {
+      const statement = await transaction.prepareAsync(MEDIA_UPSERT_SQL)
+      try {
+        for (const item of items.slice(start, start + 100)) {
+          await statement.executeAsync(mediaParams(item))
+        }
+      } finally {
+        await statement.finalizeAsync()
+      }
+    })
   }
 }
 
@@ -125,6 +137,7 @@ export async function getAllMediaItems({
   }
   const db = await getDatabase()
   const conditions = ['type = ?']
+  /** @type {(string | number)[]} */
   const params = [type]
 
   if (artist) {
@@ -451,6 +464,18 @@ export async function getPlaybackState(mediaId) {
   if (Platform.OS === 'web') return webDb.getPlaybackState(mediaId)
   const db = await getDatabase()
   return await db.getFirstAsync('SELECT * FROM playback_state WHERE mediaId = ?', [mediaId])
+}
+
+export async function getPlaybackStates(mediaIds) {
+  if (Platform.OS === 'web') return webDb.getPlaybackStates(mediaIds)
+  if (!mediaIds.length) return []
+  const db = await getDatabase()
+  const rows = []
+  for (let offset = 0; offset < mediaIds.length; offset += 200) {
+    const ids = mediaIds.slice(offset, offset + 200)
+    rows.push(...await db.getAllAsync(`SELECT * FROM playback_state WHERE mediaId IN (${ids.map(() => '?').join(',')})`, ids))
+  }
+  return rows
 }
 
 export async function getLastPlaybackState(isVideo = 0) {

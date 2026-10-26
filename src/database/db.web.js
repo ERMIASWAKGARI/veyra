@@ -364,3 +364,7 @@ export async function clearAllLibraryData() {
   webStorage.playbackState.clear()
 }
 
+
+export async function getPlaybackStates(mediaIds) {
+  return mediaIds.map((id) => webStorage.playbackState.get(id)).filter(Boolean)
+}

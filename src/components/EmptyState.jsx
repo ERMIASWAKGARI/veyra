@@ -7,12 +7,12 @@ export function EmptyState({
   title = 'No media found yet.',
   message = 'Scan your device to build your library.',
   actionLabel = 'Scan Device',
-  onAction,
-  secondaryActionLabel,
-  onSecondaryAction,
-  tertiaryActionLabel,
-  onTertiaryAction,
-  tip,
+  onAction = undefined,
+  secondaryActionLabel = undefined,
+  onSecondaryAction = undefined,
+  tertiaryActionLabel = undefined,
+  onTertiaryAction = undefined,
+  tip = undefined,
   loading = false
 }) {
   const { theme, spacing, radii, typography } = useTheme()

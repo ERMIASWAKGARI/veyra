@@ -7,7 +7,7 @@ import {
   TouchableOpacity,
   Alert
 } from 'react-native'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Play, Shuffle, ChevronLeft, Trash2 } from 'lucide-react-native'
 import { useTheme } from '../../src/stores/useTheme'
@@ -21,7 +21,7 @@ export default function PlaylistDetailScreen() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
   const { theme, spacing, radii, typography } = useTheme()
-  const { currentMedia, isPlaying, playMedia } = usePlayback()
+  const { currentMedia, isPlaying, playMedia, shuffleMedia } = usePlayback()
 
   const [playlist, setPlaylist] = useState(null)
   const [items, setItems] = useState([])
@@ -36,9 +36,9 @@ export default function PlaylistDetailScreen() {
     setItems(list)
   }, [id])
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     loadData()
-  }, [loadData])
+  }, [loadData]))
 
   const handleRemoveItem = async (track) => {
     try {
@@ -58,7 +58,7 @@ export default function PlaylistDetailScreen() {
   const handleShuffle = () => {
     if (items.length === 0) return
     const rand = Math.floor(Math.random() * items.length)
-    playMedia(items[rand], items, rand)
+    shuffleMedia(items)
     router.push(items[rand]?.type === 'video' ? '/player/video' : '/player/audio')
   }
 

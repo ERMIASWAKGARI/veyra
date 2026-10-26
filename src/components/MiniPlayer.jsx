@@ -6,18 +6,23 @@ import { usePlayback } from '../stores/usePlayback'
 import { useTheme } from '../stores/useTheme'
 import { truncateText } from '../utils/format'
 
+function MiniPlayerProgress() {
+  const { theme } = useTheme()
+  const { position, duration } = usePlayback({ progress: true })
+  const ratio = duration > 0 ? Math.min(1, Math.max(0, position / duration)) : 0
+  return <View style={[styles.progressTrack, { backgroundColor: theme.colors.borderSubtle }]}><View style={[styles.progressBar, { width: `${ratio * 100}%`, backgroundColor: theme.colors.accent }]} /></View>
+}
+
 export function MiniPlayer() {
   const router = useRouter()
   const pathname = usePathname()
   const { theme, spacing, radii, typography } = useTheme()
-  const { currentMedia, isPlaying, togglePlayPause, skipToNext, skipToPrevious, position, duration } = usePlayback()
+  const { currentMedia, isPlaying, togglePlayPause, skipToNext, skipToPrevious } = usePlayback()
 
   // Do not show mini-player if no media is loaded or if already on the full player screen
-  if (!currentMedia || pathname.startsWith('/player')) {
+  if (!currentMedia || currentMedia.type === 'video' || pathname.startsWith('/player')) {
     return null
   }
-
-  const progressRatio = duration > 0 ? Math.min(1, Math.max(0, position / duration)) : 0
 
   const handlePress = () => {
     if (currentMedia.type === 'video') {
@@ -29,18 +34,7 @@ export function MiniPlayer() {
 
   return (
     <View style={[styles.outerContainer, { backgroundColor: theme.colors.surfaceElevated, borderTopColor: theme.colors.border }]}>
-      {/* Top progress indicator line */}
-      <View style={[styles.progressTrack, { backgroundColor: theme.colors.borderSubtle }]}>
-        <View
-          style={[
-            styles.progressBar,
-            {
-              width: `${progressRatio * 100}%`,
-              backgroundColor: theme.colors.accent
-            }
-          ]}
-        />
-      </View>
+      <MiniPlayerProgress />
 
       <TouchableOpacity
         style={styles.innerContainer}

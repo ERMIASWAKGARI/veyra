@@ -9,7 +9,7 @@ import {
   Modal,
   Alert
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useRouter, useFocusEffect } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Plus, ListMusic, MoreVertical, Trash2, Edit3, Play } from 'lucide-react-native'
 import { useTheme } from '../../src/stores/useTheme'
@@ -36,9 +36,9 @@ export default function PlaylistsScreen() {
     }
   }, [])
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     loadPlaylists()
-  }, [loadPlaylists])
+  }, [loadPlaylists]))
 
   const handleCreate = async () => {
     if (!newPlaylistName.trim()) return

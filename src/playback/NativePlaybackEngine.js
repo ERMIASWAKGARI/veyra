@@ -2,14 +2,6 @@ import { NativeModules, NativeEventEmitter, Platform } from 'react-native'
 
 const { VeyraPlayback } = NativeModules
 
-let createVideoPlayer = null
-try {
-  const expoVideo = require('expo-video')
-  createVideoPlayer = expoVideo.createVideoPlayer
-} catch (e) {
-  console.warn('Could not load expo-video in NativePlaybackEngine:', e)
-}
-
 /**
  * NativePlaybackEngine encapsulates communication with the Android Jetpack Media3
  * MediaSessionService, or falls back to standard HTML5/WebAudio in dev/web environments
@@ -17,7 +9,9 @@ try {
  */
 class NativePlaybackEngineWrapper {
   constructor() {
-    this.isNativeAvailable = !!VeyraPlayback
+    this.isNativeAvailable = Platform.OS === 'android' && !!VeyraPlayback
+    this.progressUpdatesEnabled = false
+    this.loadId = 0
     this.eventEmitter = this.isNativeAvailable ? new NativeEventEmitter(VeyraPlayback) : null
     this.listeners = new Set()
 
@@ -40,6 +34,9 @@ class NativePlaybackEngineWrapper {
     this.shuffledIndices = []
 
     if (this.isNativeAvailable && this.eventEmitter) {
+      this.eventEmitter.addListener('onPlaybackProgress', (state) => {
+        this.notify('onPlaybackProgress', state)
+      })
       this.eventEmitter.addListener('onPlaybackStateChanged', (state) => {
         this.notify('onPlaybackStateChanged', state)
       })
@@ -76,7 +73,7 @@ class NativePlaybackEngineWrapper {
     if (this.isNativeAvailable) {
       return VeyraPlayback.play(mediaItem)
     }
-    this._playFallback(mediaItem)
+    return this._playFallback(mediaItem)
   }
 
   async pause() {
@@ -111,21 +108,21 @@ class NativePlaybackEngineWrapper {
     if (this.isNativeAvailable) {
       return VeyraPlayback.skipToNext()
     }
-    this._skipNextFallback()
+    return this._skipNextFallback()
   }
 
   async skipToPrevious() {
     if (this.isNativeAvailable) {
       return VeyraPlayback.skipToPrevious()
     }
-    this._skipPrevFallback()
+    return this._skipPrevFallback()
   }
 
   async setQueue(items, startIndex = 0) {
     if (this.isNativeAvailable) {
       return VeyraPlayback.setQueue(items, startIndex)
     }
-    this._setQueueFallback(items, startIndex)
+    return this._setQueueFallback(items, startIndex)
   }
 
   async addToQueue(item) {
@@ -174,7 +171,37 @@ class NativePlaybackEngineWrapper {
     if (this.isNativeAvailable) {
       return VeyraPlayback.getPlaybackState()
     }
+    if (this.nativePlayer) {
+      this.fallbackState.position = this.nativePlayer.currentTime * 1000
+      this.fallbackState.duration = this.nativePlayer.duration * 1000 || this.fallbackState.duration
+    } else if (this.fallbackAudio) {
+      this.fallbackState.position = this.fallbackAudio.currentTime * 1000
+    }
     return { ...this.fallbackState }
+  }
+
+  setProgressUpdatesEnabled(enabled) {
+    this.progressUpdatesEnabled = enabled
+    if (this.isNativeAvailable) VeyraPlayback.setProgressUpdatesEnabled?.(enabled)
+    else if (this.nativePlayer) this.nativePlayer.timeUpdateEventInterval = enabled ? 0.5 : 0
+  }
+
+  setAutoplayEnabled(enabled) {
+    this.autoplayEnabled = enabled
+    if (this.isNativeAvailable) VeyraPlayback.setAutoplayEnabled?.(enabled)
+  }
+
+  setSleepTimer(durationMs) {
+    if (this.isNativeAvailable) VeyraPlayback.setSleepTimer?.(durationMs)
+  }
+
+  _emitProgress() {
+    if (!this.progressUpdatesEnabled) return
+    this.notify('onPlaybackProgress', {
+      mediaId: this.fallbackState.currentMedia?.id,
+      position: this.fallbackState.position,
+      duration: this.fallbackState.duration
+    })
   }
 
   // ---------------- Fallback implementation for dev & web ----------------
@@ -194,7 +221,7 @@ class NativePlaybackEngineWrapper {
         })
         this.fallbackAudio.addEventListener('timeupdate', () => {
           this.fallbackState.position = (this.fallbackAudio.currentTime || 0) * 1000
-          this._emitFallbackState()
+          this._emitProgress()
         })
         this.fallbackAudio.addEventListener('loadedmetadata', () => {
           this.fallbackState.duration = (this.fallbackAudio.duration || 0) * 1000
@@ -211,17 +238,18 @@ class NativePlaybackEngineWrapper {
   }
 
   _initNativePlayer(uri) {
-    if (Platform.OS === 'web' || !createVideoPlayer) return
+    if (Platform.OS === 'web') return
 
     this._cleanupNativePlayer()
 
     try {
+      const { createVideoPlayer } = require('expo-video')
       this.nativePlayer = createVideoPlayer(uri)
       this.nativePlayer.loop = false
       this.nativePlayer.volume = 1.0
       this.nativePlayer.muted = false
       this.nativePlayer.playbackRate = this.fallbackState.speed
-      this.nativePlayer.timeUpdateEventInterval = 0.25
+      this.nativePlayer.timeUpdateEventInterval = this.progressUpdatesEnabled ? 0.5 : 0
 
       const subPlaying = this.nativePlayer.addListener('playingChange', ({ isPlaying }) => {
         this.fallbackState.isPlaying = isPlaying
@@ -234,10 +262,12 @@ class NativePlaybackEngineWrapper {
         if (this.nativePlayer?.duration && this.nativePlayer.duration > 0) {
           this.fallbackState.duration = this.nativePlayer.duration * 1000
         }
-        this._emitFallbackState()
+        this._emitProgress()
       })
 
       const subStatus = this.nativePlayer.addListener('statusChange', ({ status, error }) => {
+        this.fallbackState.playbackState = status === 'loading' ? 2 : status === 'readyToPlay' ? 3 : 1
+        this._emitFallbackState()
         if (error) {
           console.warn('Native fallback player status error:', error)
           this.notify('onPlayerError', { errorCode: 1, message: error?.message || 'Playback failed' })
@@ -270,44 +300,39 @@ class NativePlaybackEngineWrapper {
     }
   }
 
-  _playFallback(mediaItem) {
+  async _playFallback(mediaItem) {
     if (!mediaItem) return
 
     this.fallbackState.currentMedia = mediaItem
     this.fallbackState.position = 0
     this.fallbackState.duration = mediaItem.duration || 0
-    this.fallbackState.isPlaying = true
-    this.fallbackState.playbackState = 3
+    this.fallbackState.isPlaying = false
+    this.fallbackState.playbackState = 2
 
-    if (Platform.OS === 'web') {
-      this._initAudioElementIfNeeded()
-      if (this.fallbackAudio && mediaItem.uri) {
-        this.fallbackAudio.src = mediaItem.uri
-        this.fallbackAudio.playbackRate = this.fallbackState.speed
-        this.fallbackAudio.play().catch(() => {})
-      }
-    } else {
-      // Native fallback (Expo Go / Dev mode without custom native module)
-      if (this.nativePlayer) {
-        try {
-          if (this.nativePlayer.replaceAsync) {
-            this.nativePlayer.replaceAsync(mediaItem.uri).catch(() => {})
-          } else {
-            this.nativePlayer.replace(mediaItem.uri)
-          }
-          this.nativePlayer.volume = 1.0
-          this.nativePlayer.muted = false
-          this.nativePlayer.playbackRate = this.fallbackState.speed
-          this.nativePlayer.play()
-        } catch (e) {
-          this._initNativePlayer(mediaItem.uri)
-          this.nativePlayer?.play()
+    const loadId = ++this.loadId
+    try {
+      if (Platform.OS === 'web') {
+        this._initAudioElementIfNeeded()
+        if (this.fallbackAudio && mediaItem.uri) {
+          this.fallbackAudio.src = mediaItem.uri
+          this.fallbackAudio.playbackRate = this.fallbackState.speed
+          await this.fallbackAudio.play()
         }
       } else {
-        this._initNativePlayer(mediaItem.uri)
-        this.nativePlayer?.play()
+        if (!this.nativePlayer) this._initNativePlayer(null)
+        if (!this.nativePlayer) throw new Error('Audio player unavailable')
+        await this.nativePlayer.replaceAsync(mediaItem.uri)
+        if (loadId !== this.loadId) return
+        this.nativePlayer.playbackRate = this.fallbackState.speed
+        this.nativePlayer.play()
       }
+    } catch (error) {
+      if (loadId !== this.loadId) return
+      this.fallbackState.isPlaying = false
+      this.notify('onPlayerError', { errorCode: 1, message: error.message || 'Unable to play this file' })
+      return
     }
+    if (loadId !== this.loadId) return
 
     this.notify('onMediaChanged', { media: mediaItem })
     this._emitFallbackState()
@@ -334,14 +359,14 @@ class NativePlaybackEngineWrapper {
   }
 
   _stopFallback() {
+    ++this.loadId
     this.fallbackState.isPlaying = false
     this.fallbackState.position = 0
     if (Platform.OS === 'web' && this.fallbackAudio) {
       this.fallbackAudio.pause()
       this.fallbackAudio.currentTime = 0
     } else if (this.nativePlayer) {
-      this.nativePlayer.pause()
-      this.nativePlayer.currentTime = 0
+      this._cleanupNativePlayer()
     }
     this._emitFallbackState()
   }
@@ -356,13 +381,13 @@ class NativePlaybackEngineWrapper {
     this._emitFallbackState()
   }
 
-  _setQueueFallback(items, startIndex = 0) {
+  async _setQueueFallback(items, startIndex = 0) {
     this.fallbackState.queue = [...items]
     this.fallbackState.currentIndex = startIndex
     this._generateShuffledIndices()
     this.notify('onQueueChanged', { queue: this.fallbackState.queue, currentIndex: startIndex })
     if (items[startIndex]) {
-      this._playFallback(items[startIndex])
+      await this._playFallback(items[startIndex])
     }
   }
 
@@ -387,9 +412,20 @@ class NativePlaybackEngineWrapper {
 
   _removeFromQueueFallback(index) {
     if (index >= 0 && index < this.fallbackState.queue.length) {
+      const wasCurrent = index === this.fallbackState.currentIndex
+      if (index < this.fallbackState.currentIndex) this.fallbackState.currentIndex--
       this.fallbackState.queue.splice(index, 1)
       if (this.fallbackState.currentIndex >= this.fallbackState.queue.length) {
         this.fallbackState.currentIndex = this.fallbackState.queue.length - 1
+      }
+      if (wasCurrent) {
+        const next = this.fallbackState.queue[this.fallbackState.currentIndex]
+        if (next) this._playFallback(next)
+        else {
+          this._stopFallback()
+          this.fallbackState.currentMedia = null
+          this.notify('onMediaChanged', { media: null })
+        }
       }
       this._generateShuffledIndices()
       this.notify('onQueueChanged', {
@@ -440,14 +476,14 @@ class NativePlaybackEngineWrapper {
     let nextIndex = this.fallbackState.currentIndex + 1
     if (this.fallbackState.shuffleEnabled && this.shuffledIndices.length > 0) {
       const currentPos = this.shuffledIndices.indexOf(this.fallbackState.currentIndex)
-      const nextPos = (currentPos + 1) % this.shuffledIndices.length
-      nextIndex = this.shuffledIndices[nextPos]
+      const nextPos = currentPos + 1
+      nextIndex = nextPos < this.shuffledIndices.length ? this.shuffledIndices[nextPos] : queue.length
     }
 
     if (nextIndex >= queue.length) {
       if (this.fallbackState.repeatMode === 2) {
         // Repeat All
-        nextIndex = 0
+        nextIndex = this.fallbackState.shuffleEnabled ? this.shuffledIndices[0] : 0
       } else {
         this._pauseFallback()
         return
@@ -464,15 +500,21 @@ class NativePlaybackEngineWrapper {
     if (queue.length === 0) return
 
     let prevIndex = this.fallbackState.currentIndex - 1
-    if (prevIndex < 0) {
-      prevIndex = queue.length - 1
+    if (this.fallbackState.shuffleEnabled) {
+      const shuffledPosition = this.shuffledIndices.indexOf(this.fallbackState.currentIndex)
+      prevIndex = this.shuffledIndices[Math.max(0, shuffledPosition - 1)]
     }
+    if (prevIndex < 0) prevIndex = 0
     this.fallbackState.currentIndex = prevIndex
     this._playFallback(queue[prevIndex])
     this.notify('onQueueChanged', { queue, currentIndex: prevIndex })
   }
 
   _onTrackEnded() {
+    if (this.autoplayEnabled === false) {
+      this._pauseFallback()
+      return
+    }
     if (this.fallbackState.repeatMode === 1) {
       // Repeat One
       if (Platform.OS === 'web' && this.fallbackAudio) {

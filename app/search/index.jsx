@@ -92,7 +92,7 @@ export default function SearchScreen() {
         {query.trim().length > 0 && !hasAnyResults && !isSearching && (
           <View style={styles.noResults}>
             <Text style={[styles.noResultsText, { color: theme.colors.textMuted }]}>
-              No results found for "{query}"
+              No results found for “{query}”
             </Text>
           </View>
         )}

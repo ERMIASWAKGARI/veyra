@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
   Platform
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useRouter, useFocusEffect } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   Music2,
@@ -86,16 +86,13 @@ export default function HomeScreen() {
     }
   }, [])
 
-  useEffect(() => {
-    // Only seed demo tracks in web preview environment
-    if (Platform.OS === 'web') {
-      seedDemoMediaIfEmpty().then(() => {
-        loadDashboardData()
-      })
-    } else {
-      loadDashboardData()
+  useFocusEffect(useCallback(() => {
+    const load = async () => {
+      if (Platform.OS === 'web') await seedDemoMediaIfEmpty()
+      await loadDashboardData()
     }
-  }, [loadDashboardData])
+    load()
+  }, [loadDashboardData]))
 
   const handleScan = async () => {
     try {

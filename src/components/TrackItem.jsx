@@ -10,9 +10,9 @@ export function TrackItem({
   isActive = false,
   isPlaying = false,
   isFavorite = false,
-  onPress,
-  onToggleFavorite,
-  onMorePress
+  onPress = undefined,
+  onToggleFavorite = undefined,
+  onMorePress = undefined
 }) {
   const { theme, spacing, radii, typography } = useTheme()
 

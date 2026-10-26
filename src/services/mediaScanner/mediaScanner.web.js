@@ -82,7 +82,7 @@ const DEMO_VIDEOS = [
  * Web-compatible media scanner (populates demo audio & video tracks).
  */
 export async function scanLocalMedia({
-  onProgress = () => {},
+  onProgress = (_progress) => {},
   scanAudio = true,
   scanVideo = true
 } = {}) {

@@ -1,12 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   Image,
-  Dimensions,
-  PanResponder
+  useWindowDimensions
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -35,71 +34,59 @@ import { formatTime } from '../../src/utils/format'
 import { QueueModal } from '../../src/components/QueueModal'
 import { SpeedModal } from '../../src/components/SpeedModal'
 import { SleepTimerModal } from '../../src/components/SleepTimerModal'
+import { SeekBar } from '../../src/components/SeekBar'
 
-const { width } = Dimensions.get('window')
-const ARTWORK_SIZE = Math.min(width - 64, 330)
+function AudioTimeline() {
+  const { theme } = useTheme()
+  const { position, duration, seekTo } = usePlayback({ progress: true })
+  const [remaining, setRemaining] = useState(false)
+  return (
+    <View style={styles.scrubberArea}>
+      <SeekBar position={position} duration={duration} onSeek={seekTo} color={theme.colors.accent} trackColor={theme.colors.surfaceHighlight} />
+      <View style={styles.timeRow}>
+        <Text style={[styles.timeText, { color: theme.colors.accentLight }]}>{formatTime(position)}</Text>
+        <TouchableOpacity accessibilityLabel="Toggle remaining time" onPress={() => setRemaining(!remaining)} hitSlop={8}>
+          <Text style={[styles.timeText, { color: theme.colors.textMuted }]}>{remaining ? `-${formatTime(Math.max(0, duration - position))}` : formatTime(duration)}</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  )
+}
 
 export default function AudioPlayerScreen() {
   const router = useRouter()
+  const { width, height } = useWindowDimensions()
+  const artworkSize = Math.min(width - 64, height * 0.32, 330)
   const insets = useSafeAreaInsets()
   const { theme, spacing, radii, typography } = useTheme()
   const {
     currentMedia,
     isPlaying,
-    position,
-    duration,
     speed,
-    shuffleEnabled,
-    repeatMode,
     queue,
     currentIndex,
+    shuffleEnabled,
+    repeatMode,
     togglePlayPause,
-    seekTo,
     seekBy,
     skipToNext,
     skipToPrevious,
     toggleShuffle,
     cycleRepeatMode,
     setPlaybackSpeed,
-    sleepTimerActive
+    sleepTimerActive,
+    error
   } = usePlayback()
 
   const [isFav, setIsFav] = useState(false)
   const [queueModalVisible, setQueueModalVisible] = useState(false)
   const [speedModalVisible, setSpeedModalVisible] = useState(false)
   const [sleepTimerVisible, setSleepTimerVisible] = useState(false)
-  const [showRemaining, setShowRemaining] = useState(false)
-
-  // Track real-time smoothed position
-  const [displayPos, setDisplayPos] = useState(position || 0)
-  const [isScrubbing, setIsScrubbing] = useState(false)
-  const [scrubPosition, setScrubPosition] = useState(0)
-
   const triggerHaptic = (style = Haptics.ImpactFeedbackStyle.Light) => {
     try {
-      Haptics.impactAsync(style)
+      Haptics.impactAsync(style).catch(() => {})
     } catch {}
   }
-
-  useEffect(() => {
-    if (!isScrubbing) {
-      setDisplayPos(position || 0)
-    }
-  }, [position, isScrubbing])
-
-  // Real-time ticking counter while playing
-  useEffect(() => {
-    if (!isPlaying || isScrubbing) return
-    const timer = setInterval(() => {
-      setDisplayPos((prev) => {
-        if (duration > 0 && prev < duration) {
-          return Math.min(prev + 250 * (speed || 1.0), duration)
-        }
-        return prev
-      })
-    }, 250)
-    return () => clearInterval(timer)
-  }, [isPlaying, isScrubbing, duration, speed])
 
   useEffect(() => {
     if (currentMedia?.id) {
@@ -113,42 +100,6 @@ export default function AudioPlayerScreen() {
     const newState = await toggleFavorite(currentMedia.id, 'audio')
     setIsFav(newState)
   }
-
-  const currentPos = isScrubbing ? scrubPosition : displayPos
-  const progressRatio = duration > 0 ? Math.min(1, Math.max(0, currentPos / duration)) : 0
-
-  // Drag scrubber PanResponder
-  const scrubberWidth = width - 48
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (evt) => {
-        setIsScrubbing(true)
-        triggerHaptic()
-        const locationX = evt.nativeEvent.locationX
-        const ratio = Math.max(0, Math.min(1, locationX / scrubberWidth))
-        setScrubPosition(ratio * (duration || 0))
-      },
-      onPanResponderMove: (evt) => {
-        const locationX = evt.nativeEvent.locationX
-        const ratio = Math.max(0, Math.min(1, locationX / scrubberWidth))
-        setScrubPosition(ratio * (duration || 0))
-      },
-      onPanResponderRelease: (evt) => {
-        const locationX = evt.nativeEvent.locationX
-        const ratio = Math.max(0, Math.min(1, locationX / scrubberWidth))
-        const targetMs = ratio * (duration || 0)
-        seekTo(targetMs)
-        setDisplayPos(targetMs)
-        setIsScrubbing(false)
-        triggerHaptic(Haptics.ImpactFeedbackStyle.Medium)
-      },
-      onPanResponderTerminate: () => {
-        setIsScrubbing(false)
-      }
-    })
-  ).current
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.playerBackground, paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 20) }]}>
@@ -193,8 +144,8 @@ export default function AudioPlayerScreen() {
           style={[
             styles.artworkWrapper,
             {
-              width: ARTWORK_SIZE,
-              height: ARTWORK_SIZE,
+              width: artworkSize,
+              height: artworkSize,
               borderRadius: radii.xl,
               backgroundColor: theme.colors.surfaceElevated,
               shadowColor: theme.colors.accent,
@@ -207,7 +158,7 @@ export default function AudioPlayerScreen() {
           {currentMedia?.artworkUri ? (
             <Image
               source={{ uri: currentMedia.artworkUri }}
-              style={[styles.artwork, { borderRadius: radii.xl }]}
+              style={[styles.artwork, { width: artworkSize, height: artworkSize }, { borderRadius: radii.xl }]}
               resizeMode="cover"
             />
           ) : (
@@ -254,51 +205,8 @@ export default function AudioPlayerScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Real-time Scrubber Progress Bar */}
-      <View style={styles.scrubberArea}>
-        <View style={styles.scrubberTrackWrapper} {...panResponder.panHandlers}>
-          <View style={[styles.scrubberTrack, { backgroundColor: theme.colors.surfaceHighlight, borderRadius: radii.full }]}>
-            <View
-              style={[
-                styles.scrubberFill,
-                { width: `${progressRatio * 100}%`, backgroundColor: theme.colors.accent, borderRadius: radii.full }
-              ]}
-            />
-          </View>
-          {/* Scrubber Thumb */}
-          <View
-            style={[
-              styles.scrubberThumb,
-              {
-                left: `${Math.max(0, Math.min(97, progressRatio * 100))}%`,
-                backgroundColor: '#FFFFFF',
-                borderColor: theme.colors.accent,
-                shadowColor: theme.colors.accent
-              }
-            ]}
-          />
-        </View>
-
-        {/* Real-time Timers (Counting minutes, seconds) */}
-        <View style={styles.timeRow}>
-          <Text style={[styles.timeText, { color: theme.colors.accentLight }]}>
-            {formatTime(currentPos)}
-          </Text>
-          <TouchableOpacity
-            onPress={() => {
-              triggerHaptic()
-              setShowRemaining(!showRemaining)
-            }}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Text style={[styles.timeText, { color: theme.colors.textMuted }]}>
-              {showRemaining
-                ? `-${formatTime(Math.max(0, duration - currentPos))}`
-                : formatTime(duration)}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+      <AudioTimeline />
+      {error && <Text accessibilityRole="alert" style={{ color: theme.colors.textSecondary, textAlign: 'center', paddingHorizontal: 24 }}>{error}</Text>}
 
       {/* Primary Transport Controls with Prominent Next & Prev Buttons */}
       <View style={styles.controlsRow}>

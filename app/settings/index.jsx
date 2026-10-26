@@ -8,7 +8,8 @@ import {
   Switch,
   Alert,
   Modal,
-  Image
+  Image,
+  Platform
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
@@ -32,7 +33,8 @@ import {
 import { useTheme } from '../../src/stores/useTheme'
 import { APP_CONFIG } from '../../src/constants/config'
 import { scanLocalMedia, scanCustomFolderSAF, pickFilesAndImport } from '../../src/services/mediaScanner/mediaScanner'
-import { clearAllLibraryData, clearDemoMedia } from '../../src/database/db'
+import { clearAllLibraryData, clearDemoMedia, getSetting, setSetting } from '../../src/database/db'
+import { NativePlaybackEngine } from '../../src/playback/NativePlaybackEngine'
 import { Header } from '../../src/components/Header'
 
 export default function SettingsScreen() {
@@ -43,6 +45,14 @@ export default function SettingsScreen() {
   const [resumePlayback, setResumePlayback] = useState(true)
   const [isScanning, setIsScanning] = useState(false)
   const [themeModalVisible, setThemeModalVisible] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    Promise.all([getSetting('autoplayNext', true), getSetting('resumePlayback', true)]).then(([autoplay, resume]) => {
+      if (active) { setAutoplayNext(autoplay); setResumePlayback(resume) }
+    }).catch(() => {})
+    return () => { active = false }
+  }, [])
 
   const handleRescan = async () => {
     try {
@@ -180,7 +190,7 @@ export default function SettingsScreen() {
               </View>
               <Switch
                 value={autoplayNext}
-                onValueChange={setAutoplayNext}
+                onValueChange={(enabled) => { setAutoplayNext(enabled); NativePlaybackEngine.setAutoplayEnabled(enabled); setSetting('autoplayNext', enabled).catch(() => {}) }}
                 trackColor={{ false: theme.colors.surfaceHighlight, true: theme.colors.accent }}
               />
             </View>
@@ -199,7 +209,7 @@ export default function SettingsScreen() {
               </View>
               <Switch
                 value={resumePlayback}
-                onValueChange={setResumePlayback}
+                onValueChange={(enabled) => { setResumePlayback(enabled); setSetting('resumePlayback', enabled).catch(() => {}) }}
                 trackColor={{ false: theme.colors.surfaceHighlight, true: theme.colors.accent }}
               />
             </View>

@@ -13,7 +13,7 @@ import {
 import { APP_CONFIG } from '../../constants/config'
 
 function getSAF() {
-  return FileSystemLegacy?.StorageAccessFramework || FileSystemModern?.StorageAccessFramework || null
+  return FileSystemLegacy.StorageAccessFramework || null
 }
 
 /**
@@ -22,15 +22,9 @@ function getSAF() {
 function getLegacyMediaLibrary() {
   if (Platform.OS === 'web') return null
   try {
-    const mod = require('expo-media-library/legacy')
-    if (mod && typeof mod.getAssetsAsync === 'function') {
-      return mod
-    }
-  } catch {}
-  try {
-    const mod = require('expo-media-library')
-    if (mod && typeof mod.getAssetsAsync === 'function') {
-      return mod
+    const legacyModule = require('expo-media-library/legacy')
+    if (legacyModule && typeof legacyModule.getAssetsAsync === 'function') {
+      return legacyModule
     }
   } catch {}
   return null
@@ -63,6 +57,7 @@ export async function requestMediaPermissions({ scanAudio = true, scanVideo = tr
   if (Platform.OS === 'android') {
     try {
       if (Platform.Version >= 33) {
+        /** @type {import('react-native').Permission[]} */
         const permsToAsk = []
         if (scanAudio) permsToAsk.push(PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO)
         if (scanVideo) permsToAsk.push(PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO)
@@ -87,6 +82,7 @@ export async function requestMediaPermissions({ scanAudio = true, scanVideo = tr
   try {
     const ml = getLegacyMediaLibrary() || getNextMediaLibrary()
     if (ml?.requestPermissionsAsync) {
+      /** @type {import('expo-media-library/legacy').GranularPermission[]} */
       const granular = []
       if (scanAudio) granular.push('audio')
       if (scanVideo) granular.push('video')
@@ -205,7 +201,7 @@ function extractFilenameFromSAFUri(fileUri) {
  * Asynchronous, incremental media scanner for local device storage (MediaStore).
  */
 export async function scanLocalMedia({
-  onProgress = () => {},
+  onProgress = (_progress) => {},
   scanAudio = true,
   scanVideo = true,
   forceFullRescan = false
@@ -239,6 +235,7 @@ export async function scanLocalMedia({
   // -------------------------------------------------------------
   const LegacyML = getLegacyMediaLibrary()
   if (LegacyML && typeof LegacyML.getAssetsAsync === 'function') {
+    /** @type {import('expo-media-library/legacy').MediaTypeValue[]} */
     const mediaTypes = []
     if (scanAudio && LegacyML.MediaType?.audio) {
       mediaTypes.push(LegacyML.MediaType.audio)
@@ -284,7 +281,7 @@ export async function scanLocalMedia({
           for (const asset of assets) {
             try {
               const isVideo =
-                asset.mediaType === LegacyML.MediaType?.video || asset.mediaType === 'video'
+                asset.mediaType === 'video'
               const type = isVideo ? 'video' : 'audio'
               const { title, artist } = parseTrackMetadata(asset.filename)
               const folder = extractFolderName(asset.uri, asset.filename)
@@ -308,8 +305,8 @@ export async function scanLocalMedia({
                 discNumber: null,
                 artworkUri: null,
                 folder,
-                dateAdded: asset.creationTime ? asset.creationTime * 1000 : Date.now(),
-                dateModified: asset.modificationTime ? asset.modificationTime * 1000 : Date.now()
+                dateAdded: asset.creationTime ? asset.creationTime : Date.now(),
+                dateModified: asset.modificationTime ? asset.modificationTime : Date.now()
               })
             } catch (itemErr) {
               console.warn('Skipping unparsable asset:', asset?.filename, itemErr)
@@ -432,7 +429,7 @@ export async function scanLocalMedia({
  * Lets the user pick specific audio/video files directly from anywhere on their device
  * (including Downloads folder, SD card, Drive) without any Android SAF folder restrictions.
  */
-export async function pickFilesAndImport({ onProgress = () => {} } = {}) {
+export async function pickFilesAndImport({ onProgress = (_progress) => {}, mediaType = null } = {}) {
   if (Platform.OS === 'web') return { totalScanned: 0, newOrUpdated: 0 }
 
   try {
@@ -445,7 +442,7 @@ export async function pickFilesAndImport({ onProgress = () => {} } = {}) {
 
     const pickResult = await ExpoFile.pickFileAsync({
       multipleFiles: true,
-      mimeTypes: ['audio/*', 'video/*']
+      mimeTypes: mediaType === 'audio' ? ['audio/*'] : mediaType === 'video' ? ['video/*'] : ['audio/*', 'video/*']
     })
 
     if (!pickResult || pickResult.canceled) {
@@ -519,7 +516,7 @@ export async function pickFilesAndImport({ onProgress = () => {} } = {}) {
  * Lets the user pick any local folder via Android Storage Access Framework (SAF)
  * or modern FileSystem Directory picker, and recursively imports all audio/video files.
  */
-export async function scanCustomFolderSAF({ onProgress = () => {} } = {}) {
+export async function scanCustomFolderSAF({ onProgress = (_progress) => {} } = {}) {
   if (Platform.OS !== 'android') return { totalScanned: 0, newOrUpdated: 0 }
 
   const audioExtensions = ['.mp3', '.m4a', '.aac', '.wav', '.flac', '.ogg', '.opus', '.wma']
@@ -552,9 +549,7 @@ export async function scanCustomFolderSAF({ onProgress = () => {} } = {}) {
             for (const entry of entries) {
               try {
                 if (
-                  entry instanceof ExpoDirectory ||
-                  entry?.constructor?.name === 'Directory' ||
-                  entry?.isDirectory
+                  entry instanceof ExpoDirectory
                 ) {
                   dirQueue.push(entry)
                 } else {

@@ -20,15 +20,11 @@ export function PlaylistSelectModal({ visible, mediaItem, onClose }) {
   const [isCreating, setIsCreating] = useState(false)
 
   useEffect(() => {
-    if (visible) {
-      loadPlaylists()
-    }
+    if (!visible) return
+    let active = true
+    getPlaylists().then((list) => { if (active) setPlaylists(list) }).catch(() => {})
+    return () => { active = false }
   }, [visible])
-
-  const loadPlaylists = async () => {
-    const list = await getPlaylists()
-    setPlaylists(list)
-  }
 
   const handleSelectPlaylist = async (playlist) => {
     if (!mediaItem) return

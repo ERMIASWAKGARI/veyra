@@ -54,6 +54,11 @@
         "projectId": "5f77713e-8366-480b-89c9-b7ec8a6265d7"
       }
     },
-    "owner": "ermiaswakgari"
+    "owner": "ermiaswakgari",
+    "splash": {
+      "image": "./assets/branding/veyra-icon-1024.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F1015"
+    }
   }
 }

@@ -11,7 +11,7 @@ import {
   ActivityIndicator,
   Platform
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useRouter, useFocusEffect } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   Shuffle,
@@ -63,7 +63,7 @@ export default function MusicScreen() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
   const { theme, spacing, radii, typography } = useTheme()
-  const { currentMedia, isPlaying, playMedia, addToQueue, playNext } = usePlayback()
+  const { currentMedia, isPlaying, playMedia, shuffleMedia, addToQueue, playNext } = usePlayback()
 
   const [activeTab, setActiveTab] = useState('songs')
   const [items, setItems] = useState([])
@@ -114,9 +114,9 @@ export default function MusicScreen() {
     }
   }, [activeTab, sortBy, sortOrder])
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     loadData()
-  }, [loadData])
+  }, [loadData]))
 
   const handleToggleFavorite = async (track) => {
     const isNowFav = await toggleFavorite(track.id, 'audio')
@@ -128,8 +128,7 @@ export default function MusicScreen() {
 
   const handleShuffleAll = () => {
     if (items.length === 0) return
-    const randomIndex = Math.floor(Math.random() * items.length)
-    playMedia(items[randomIndex], items, randomIndex)
+    shuffleMedia(items)
     router.push('/player/audio')
   }
 

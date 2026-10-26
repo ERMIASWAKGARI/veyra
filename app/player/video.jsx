@@ -1,450 +1,229 @@
-import React, { useState, useEffect, useRef } from 'react'
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Dimensions,
-  Platform,
-  Modal
-} from 'react-native'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { ActivityIndicator, AppState, Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { useEvent, useEventListener } from 'expo'
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useVideoPlayer, VideoView } from 'expo-video'
-import * as Haptics from 'expo-haptics'
-import {
-  ChevronLeft,
-  Play,
-  Pause,
-  RotateCcw,
-  RotateCw,
-  Gauge,
-  Subtitles,
-  Maximize2,
-  Check,
-  SkipBack,
-  SkipForward
-} from 'lucide-react-native'
+import { Check, ChevronLeft, Gauge, Maximize2, Pause, Play, RotateCcw, RotateCw, SkipBack, SkipForward, Subtitles } from 'lucide-react-native'
 import { useTheme } from '../../src/stores/useTheme'
 import { usePlayback } from '../../src/stores/usePlayback'
-import { savePlaybackState, getPlaybackState, recordPlayHistory } from '../../src/database/db'
+import { usePlayerControls } from '../../src/stores/usePlayerControls'
+import { getPlaybackState, getSetting, recordPlayHistory, savePlaybackState, updateMediaDuration } from '../../src/database/db'
+import { PlaybackManager } from '../../src/playback/PlaybackManager'
 import { formatTime } from '../../src/utils/format'
 import { SpeedModal } from '../../src/components/SpeedModal'
+import { SeekBar } from '../../src/components/SeekBar'
 import { APP_CONFIG } from '../../src/constants/config'
-import { NativePlaybackEngine } from '../../src/playback/NativePlaybackEngine'
 
 export default function VideoPlayerScreen() {
+  const { currentMedia } = usePlayback()
+  const router = useRouter()
+  if (!currentMedia || currentMedia.type !== 'video') {
+    return <View style={styles.container}><TouchableOpacity accessibilityLabel="Back to library" onPress={() => router.back()} style={{ padding: 48 }}><Text style={{ color: '#FFFFFF' }}>Back to library</Text></TouchableOpacity></View>
+  }
+  return <VideoSession key={currentMedia.id} media={currentMedia} />
+}
+
+function VideoTimeline({ player, media, onSeek, onScrubStart, onScrubEnd }) {
+  const { theme } = useTheme()
+  const [remaining, setRemaining] = useState(false)
+  const [position, setPosition] = useState(() => player.currentTime * 1000)
+  const [duration, setDuration] = useState(() => player.duration * 1000 || media.duration || 0)
+  useEventListener(player, 'timeUpdate', ({ currentTime }) => {
+    setPosition(currentTime * 1000)
+    setDuration(player.duration * 1000 || media.duration || 0)
+    PlaybackManager.updateVideo(media.id, { position: currentTime * 1000 })
+  })
+  useEffect(() => {
+    player.timeUpdateEventInterval = 0.5
+    return () => { player.timeUpdateEventInterval = 0 }
+  }, [player])
+  const seek = (value) => { onSeek(value); setPosition(value) }
+  return (
+    <View style={styles.bottomBar}>
+      <View style={styles.timeRow}>
+        <Text style={styles.timeText}>{formatTime(position)}</Text>
+        <TouchableOpacity accessibilityLabel="Toggle remaining time" onPress={() => setRemaining(!remaining)}>
+          <Text style={styles.timeText}>{remaining ? `-${formatTime(Math.max(0, duration - position))}` : formatTime(duration)}</Text>
+        </TouchableOpacity>
+      </View>
+      <SeekBar position={position} duration={duration} onSeek={seek} onScrubStart={onScrubStart} onScrubEnd={onScrubEnd} color={theme.colors.accent} trackColor="rgba(255,255,255,0.35)" />
+    </View>
+  )
+}
+
+function VideoSession({ media }) {
   const router = useRouter()
   const insets = useSafeAreaInsets()
-  const { theme, spacing, radii, typography } = useTheme()
-  const { currentMedia, skipToNext, skipToPrevious } = usePlayback()
+  const { theme, radii } = useTheme()
+  const { currentIndex, queue, skipToNext, skipToPrevious } = usePlayback()
+  const viewRef = useRef(null)
+  const fullscreen = useRef(false)
+  const [speedVisible, setSpeedVisible] = useState(false)
+  const [subtitlesVisible, setSubtitlesVisible] = useState(false)
+  const [scrubbing, setScrubbing] = useState(false)
+  const [speed, setSpeed] = useState(1)
+  const [subtitleTracks, setSubtitleTracks] = useState([])
+  const [subtitle, setSubtitle] = useState(null)
+  const [loadError, setLoadError] = useState(null)
+  const [attempt, setAttempt] = useState(0)
+  const player = useVideoPlayer(null, (instance) => {
+    instance.loop = false
+    instance.audioMixingMode = 'doNotMix'
+    instance.timeUpdateEventInterval = 0
+  })
+  const { isPlaying } = useEvent(player, 'playingChange', { isPlaying: false })
+  const { status, error } = useEvent(player, 'statusChange', { status: 'loading', error: null })
+  const failure = loadError || error?.message
+  const controls = usePlayerControls(isPlaying, scrubbing || speedVisible || subtitlesVisible || status !== 'readyToPlay' || !!failure)
 
-  const [showControls, setShowControls] = useState(true)
-  const [speedModalVisible, setSpeedModalVisible] = useState(false)
-  const [subtitleModalVisible, setSubtitleModalVisible] = useState(false)
-  const [currentSpeed, setCurrentSpeed] = useState(1.0)
-  const [selectedSubtitle, setSelectedSubtitle] = useState('Off')
-  const [showRemaining, setShowRemaining] = useState(false)
+  const persist = useCallback(() => {
+    const position = player.currentTime * 1000
+    const duration = player.duration * 1000 || media.duration || 0
+    PlaybackManager.updateVideo(media.id, { position, duration, speed: player.playbackRate })
+    return savePlaybackState({
+      mediaId: media.id,
+      position: duration > 0 && position / duration >= APP_CONFIG.playback.completionThresholdRatio ? 0 : position,
+      duration, speed: player.playbackRate, isVideo: 1
+    }).catch(() => {})
+  }, [media.id, media.duration, player])
 
-  // Real-time video position and duration
-  const [videoPosMs, setVideoPosMs] = useState(0)
-  const [videoDurMs, setVideoDurMs] = useState(currentMedia?.duration || 0)
-  const [isVideoPlaying, setIsVideoPlaying] = useState(true)
-  const [isScrubbing, setIsScrubbing] = useState(false)
-  const [scrubPosMs, setScrubPosMs] = useState(0)
-
-  const controlsTimeoutRef = useRef(null)
-
-  const triggerHaptic = (style = Haptics.ImpactFeedbackStyle.Light) => {
-    try {
-      Haptics.impactAsync(style)
-    } catch {}
-  }
-
-  // Pause background audio when video player opens
-  useEffect(() => {
-    NativePlaybackEngine.pause().catch(() => {})
-  }, [])
-
-  // Initialize Media3 video player with explicit volume and unmuted state
-  const player = useVideoPlayer(currentMedia?.uri || '', (p) => {
-    p.loop = false
-    p.playbackRate = currentSpeed
-    p.volume = 1.0
-    p.muted = false
-    try {
-      p.timeUpdateEventInterval = 0.25
-    } catch {}
-    p.play()
+  useEventListener(player, 'sourceLoad', ({ duration, availableSubtitleTracks }) => {
+    setSubtitleTracks(availableSubtitleTracks || [])
+    setSubtitle(null)
+    player.subtitleTrack = null
+    PlaybackManager.updateVideo(media.id, { duration: duration * 1000 })
+    updateMediaDuration(media.id, duration * 1000).catch(() => {})
+  })
+  useEventListener(player, 'playingChange', ({ isPlaying: playing }) => {
+    PlaybackManager.updateVideo(media.id, { isPlaying: playing, playbackState: 3 })
+    if (!playing) persist()
+  })
+  useEventListener(player, 'playToEnd', () => {
+    persist()
+    controls.reveal()
+    getSetting('autoplayNext', true).then((enabled) => { if (enabled) skipToNext() }).catch(() => {})
   })
 
-  // Listen to timeUpdate and playingChange for real-time timer
   useEffect(() => {
-    if (!player) return
-
-    try {
-      player.timeUpdateEventInterval = 0.25
-    } catch {}
-
-    const subTime = player.addListener('timeUpdate', ({ currentTime }) => {
-      if (!isScrubbing) {
-        setVideoPosMs((currentTime || 0) * 1000)
-        if (player.duration && player.duration > 0) {
-          setVideoDurMs(player.duration * 1000)
-        }
-      }
-    })
-
-    const subPlaying = player.addListener('playingChange', ({ isPlaying }) => {
-      setIsVideoPlaying(isPlaying)
-    })
-
-    return () => {
-      try { subTime.remove() } catch {}
-      try { subPlaying.remove() } catch {}
-    }
-  }, [player, isScrubbing])
-
-  // Real-time fallback ticker while video is playing
-  useEffect(() => {
-    if (!isVideoPlaying || isScrubbing) return
-    const interval = setInterval(() => {
-      if (player) {
-        const cur = (player.currentTime || 0) * 1000
-        setVideoPosMs(cur)
-        if (player.duration > 0) {
-          setVideoDurMs(player.duration * 1000)
-        }
-      }
-    }, 250)
-    return () => clearInterval(interval)
-  }, [isVideoPlaying, isScrubbing, player])
-
-  // Handle media switching
-  useEffect(() => {
-    if (player && currentMedia?.uri) {
+    let cancelled = false
+    const load = async () => {
       try {
-        if (player.replaceAsync) {
-          player.replaceAsync(currentMedia.uri).catch(() => {})
-        } else {
-          player.replace(currentMedia.uri)
-        }
-        player.volume = 1.0
-        player.muted = false
+        const [saved, resume] = await Promise.all([getPlaybackState(media.id), getSetting('resumePlayback', true)])
+        await PlaybackManager.videoReady
+        if (cancelled) return
+        await player.replaceAsync(media.uri)
+        if (cancelled) return
+        const savedSpeed = saved?.speed || 1
+        player.playbackRate = savedSpeed
+        setSpeed(savedSpeed)
+        if (resume && saved?.position > 0) player.currentTime = saved.position / 1000
         player.play()
-        setVideoPosMs(0)
-        setVideoDurMs(currentMedia.duration || 0)
+        await recordPlayHistory(media.id, resume ? saved?.position || 0 : 0, 0)
       } catch (err) {
-        console.warn('Video replace error:', err)
+        if (!cancelled) setLoadError(err.message || 'Unable to open this video.')
       }
     }
-  }, [currentMedia?.uri, player])
+    load()
+    return () => { cancelled = true }
+  }, [media.id, media.uri, player, attempt])
 
-  // Pause video on unmount
   useEffect(() => {
+    const detach = PlaybackManager.attachVideo(media.id, {
+      play: () => player.play(), pause: () => player.pause(),
+      seekTo: (ms) => { player.currentTime = ms / 1000 },
+      setSpeed: (value) => { player.playbackRate = value }
+    })
+    const interval = setInterval(persist, 10000)
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active' && !fullscreen.current) { player.pause(); persist() }
+    })
     return () => {
-      try {
-        player?.pause()
-      } catch {}
-    }
-  }, [player])
-
-  // Restore resume position from SQLite
-  useEffect(() => {
-    if (currentMedia?.id && player) {
-      getPlaybackState(currentMedia.id).then((saved) => {
-        if (saved && saved.position > 3000) {
-          player.currentTime = saved.position / 1000
-          setVideoPosMs(saved.position)
-        }
-      })
-    }
-  }, [currentMedia?.id, player])
-
-  // Periodic persistence of video resume position
-  useEffect(() => {
-    if (!currentMedia?.id) return
-    const interval = setInterval(() => {
-      if (player) {
-        const curMs = (player.currentTime || 0) * 1000
-        const durMs = (player.duration || 0) * 1000
-        const completion = durMs > 0 ? curMs / durMs : 0
-        const effectivePos = completion >= APP_CONFIG.playback.completionThresholdRatio ? 0 : curMs
-
-        savePlaybackState({
-          mediaId: currentMedia.id,
-          position: effectivePos,
-          duration: durMs,
-          speed: currentSpeed,
-          isVideo: 1
-        }).catch(() => {})
-      }
-    }, 4000)
-
-    return () => clearInterval(interval)
-  }, [currentMedia?.id, player, currentSpeed])
-
-  // Auto-hide controls timer
-  const resetControlsTimer = () => {
-    setShowControls(true)
-    if (controlsTimeoutRef.current) {
-      clearTimeout(controlsTimeoutRef.current)
-    }
-    controlsTimeoutRef.current = setTimeout(() => {
-      setShowControls(false)
-    }, 4000)
-  }
-
-  useEffect(() => {
-    resetControlsTimer()
-    return () => {
-      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current)
-    }
-  }, [])
-
-  const handleTogglePlay = () => {
-    if (!player) return
-    triggerHaptic(Haptics.ImpactFeedbackStyle.Medium)
-    resetControlsTimer()
-    if (player.playing) {
+      clearInterval(interval)
+      subscription.remove()
+      persist()
       player.pause()
-      setIsVideoPlaying(false)
-    } else {
-      player.play()
-      setIsVideoPlaying(true)
+      detach()
     }
-  }
+  }, [media.id, player, persist])
 
-  const handleSeekBy = (deltaSeconds) => {
-    if (!player) return
-    triggerHaptic()
-    resetControlsTimer()
-    const target = Math.max(0, Math.min((player.currentTime || 0) + deltaSeconds, player.duration || Infinity))
-    player.currentTime = target
-    setVideoPosMs(target * 1000)
+  const seek = (position) => {
+    player.currentTime = Math.max(0, Math.min(position / 1000, player.duration || Infinity))
+    PlaybackManager.updateVideo(media.id, { position: player.currentTime * 1000 })
+    controls.reveal()
+    persist()
   }
-
-  const handleSelectSpeed = (speed) => {
-    setCurrentSpeed(speed)
-    if (player) {
-      player.playbackRate = speed
-    }
+  const skip = async (direction) => {
+    await persist()
+    if (direction === 'next') await skipToNext()
+    else await skipToPrevious()
+    controls.reveal()
   }
-
-  const activePos = isScrubbing ? scrubPosMs : videoPosMs
-  const activeDur = videoDurMs > 0 ? videoDurMs : (currentMedia?.duration || 0)
-  const progressRatio = activeDur > 0 ? Math.min(1, Math.max(0, activePos / activeDur)) : 0
 
   return (
     <View style={styles.container}>
-      {/* Video View backed by Media3 */}
-      <TouchableOpacity
-        style={StyleSheet.absoluteFill}
-        activeOpacity={1}
-        onPress={() => {
-          if (showControls) {
-            setShowControls(false)
-          } else {
-            resetControlsTimer()
-          }
-        }}
-      >
+      <View pointerEvents="none" style={StyleSheet.absoluteFill}>
         <VideoView
-          style={StyleSheet.absoluteFill}
-          player={player}
-          allowsFullscreen
-          allowsPictureInPicture
-          showsTimecodes={false}
+          ref={viewRef} style={StyleSheet.absoluteFill} player={player}
+          nativeControls={false} contentFit="contain" surfaceType="surfaceView"
+          fullscreenOptions={{ enable: true }}
+          onFullscreenEnter={() => { fullscreen.current = true }}
+          onFullscreenExit={() => { fullscreen.current = false; controls.reveal(); persist() }}
         />
-      </TouchableOpacity>
-
-      {/* Control HUD Overlay */}
-      {showControls && (
-        <View style={[styles.hudOverlay, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 20) }]}>
-          {/* Top Bar */}
-          <View style={styles.topBar}>
-            <TouchableOpacity
-              style={styles.iconBtn}
-              onPress={() => router.back()}
-            >
-              <ChevronLeft size={24} color="#FFFFFF" />
-            </TouchableOpacity>
-
-            <View style={styles.titleContainer}>
-              <Text numberOfLines={1} style={styles.videoTitle}>
-                {currentMedia?.title || 'Video Player'}
-              </Text>
-            </View>
-
-            <View style={styles.topActions}>
-              <TouchableOpacity
-                style={styles.iconBtn}
-                onPress={() => setSubtitleModalVisible(true)}
-              >
-                <Subtitles size={20} color={selectedSubtitle !== 'Off' ? theme.colors.accentLight : '#FFFFFF'} />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.speedBtn}
-                onPress={() => setSpeedModalVisible(true)}
-              >
-                <Gauge size={16} color="#FFFFFF" />
-                <Text style={styles.speedBtnText}>{currentSpeed}x</Text>
-              </TouchableOpacity>
-            </View>
+      </View>
+      <Pressable
+        testID="video-controls-toggle" style={StyleSheet.absoluteFill}
+        accessibilityRole="button" accessibilityLabel={controls.visible ? 'Hide video controls' : 'Show video controls'}
+        onPress={controls.toggle}
+      />
+      {controls.visible && (
+        <View testID="video-controls" pointerEvents="box-none" style={[styles.hudOverlay, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 12) }]}>
+          <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.45)' }]} />
+          <View pointerEvents="box-none" style={styles.topBar}>
+            <TouchableOpacity accessibilityLabel="Back to library" style={styles.iconBtn} onPress={() => { persist(); router.back() }}><ChevronLeft size={24} color="#FFFFFF" /></TouchableOpacity>
+            <View pointerEvents="none" style={styles.titleContainer}><Text numberOfLines={1} style={styles.videoTitle}>{media.title}</Text></View>
+            <TouchableOpacity accessibilityLabel="Subtitles" style={styles.iconBtn} onPress={() => { controls.reveal(); setSubtitlesVisible(true) }}><Subtitles size={20} color={subtitle ? theme.colors.accentLight : '#FFFFFF'} /></TouchableOpacity>
+            <TouchableOpacity accessibilityLabel="Playback speed" style={styles.speedBtn} onPress={() => { controls.reveal(); setSpeedVisible(true) }}><Gauge size={16} color="#FFFFFF" /><Text style={styles.speedBtnText}>{speed}x</Text></TouchableOpacity>
+            <TouchableOpacity accessibilityLabel="Fullscreen" style={styles.iconBtn} onPress={() => {
+              fullscreen.current = true
+              viewRef.current?.enterFullscreen().catch((err) => { fullscreen.current = false; setLoadError(err.message) })
+            }}><Maximize2 size={20} color="#FFFFFF" /></TouchableOpacity>
           </View>
-
-          {/* Center Transport Controls */}
-          <View style={styles.centerControls}>
-            {/* Previous Video in Queue */}
-            <TouchableOpacity
-              style={styles.hudCircleBtn}
-              onPress={() => {
-                triggerHaptic(Haptics.ImpactFeedbackStyle.Medium)
-                resetControlsTimer()
-                skipToPrevious()
-              }}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            >
-              <SkipBack size={24} color="#FFFFFF" fill="#FFFFFF" />
-            </TouchableOpacity>
-
-            {/* Rewind -10s */}
-            <TouchableOpacity
-              style={styles.centerAction}
-              onPress={() => {
-                triggerHaptic()
-                handleSeekBy(-10)
-              }}
-            >
-              <RotateCcw size={28} color="#FFFFFF" />
-              <Text style={styles.seekBadge}>-10s</Text>
-            </TouchableOpacity>
-
-            {/* Big Play / Pause Button */}
-            <TouchableOpacity
-              style={[styles.bigPlayBtn, { backgroundColor: theme.colors.accent }]}
-              onPress={handleTogglePlay}
-            >
-              {isVideoPlaying ? (
-                <Pause size={34} color="#FFFFFF" fill="#FFFFFF" />
-              ) : (
-                <Play size={34} color="#FFFFFF" fill="#FFFFFF" style={{ marginLeft: 3 }} />
-              )}
-            </TouchableOpacity>
-
-            {/* Fast Forward +10s */}
-            <TouchableOpacity
-              style={styles.centerAction}
-              onPress={() => {
-                triggerHaptic()
-                handleSeekBy(10)
-              }}
-            >
-              <RotateCw size={28} color="#FFFFFF" />
-              <Text style={styles.seekBadge}>+10s</Text>
-            </TouchableOpacity>
-
-            {/* Next Video in Queue */}
-            <TouchableOpacity
-              style={styles.hudCircleBtn}
-              onPress={() => {
-                triggerHaptic(Haptics.ImpactFeedbackStyle.Medium)
-                resetControlsTimer()
-                skipToNext()
-              }}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            >
-              <SkipForward size={24} color="#FFFFFF" fill="#FFFFFF" />
-            </TouchableOpacity>
-          </View>
-
-          {/* Bottom Bar Scrubber */}
-          <View style={styles.bottomBar}>
-            <View style={styles.timeRow}>
-              <Text style={styles.timeText}>{formatTime(activePos)}</Text>
-              <TouchableOpacity
-                onPress={() => {
-                  triggerHaptic()
-                  setShowRemaining(!showRemaining)
-                }}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Text style={styles.timeText}>
-                  {showRemaining
-                    ? `-${formatTime(Math.max(0, activeDur - activePos))}`
-                    : formatTime(activeDur)}
-                </Text>
-              </TouchableOpacity>
+          {failure ? (
+            <View style={{ alignItems: 'center', padding: 20 }}>
+              <Text style={{ color: '#FFFFFF', textAlign: 'center', marginBottom: 16 }}>{failure}</Text>
+              <TouchableOpacity accessibilityLabel="Retry video" onPress={() => { setLoadError(null); setAttempt((value) => value + 1) }} style={styles.speedBtn}><Text style={styles.speedBtnText}>Try again</Text></TouchableOpacity>
             </View>
-
-            <TouchableOpacity
-              style={styles.scrubberTouch}
-              activeOpacity={1}
-              onPress={(e) => {
-                if (activeDur > 0 && player) {
-                  const { locationX } = e.nativeEvent
-                  const screenW = Dimensions.get('window').width - 48
-                  const ratio = Math.max(0, Math.min(1, locationX / screenW))
-                  const targetSec = (ratio * activeDur) / 1000
-                  player.currentTime = targetSec
-                  setVideoPosMs(targetSec * 1000)
-                  triggerHaptic()
-                  resetControlsTimer()
-                }
-              }}
-            >
-              <View style={styles.scrubberTrack}>
-                <View style={[styles.scrubberProgress, { width: `${progressRatio * 100}%`, backgroundColor: theme.colors.accent }]} />
-              </View>
-              {/* Scrubber Thumb */}
-              <View
-                style={[
-                  styles.scrubberThumb,
-                  {
-                    left: `${Math.max(0, Math.min(97, progressRatio * 100))}%`,
-                    backgroundColor: '#FFFFFF',
-                    borderColor: theme.colors.accent
-                  }
-                ]}
-              />
-            </TouchableOpacity>
-          </View>
+          ) : (
+            <View pointerEvents="box-none" style={styles.centerControls}>
+              <TouchableOpacity accessibilityLabel="Previous video" style={[styles.hudCircleBtn, currentIndex <= 0 && { opacity: 0.35 }]} disabled={currentIndex <= 0} onPress={() => skip('previous')}><SkipBack size={24} color="#FFFFFF" /></TouchableOpacity>
+              <TouchableOpacity accessibilityLabel="Back ten seconds" style={styles.centerAction} onPress={() => seek((player.currentTime - 10) * 1000)}><RotateCcw size={26} color="#FFFFFF" /><Text style={styles.seekBadge}>-10s</Text></TouchableOpacity>
+              <TouchableOpacity accessibilityLabel={isPlaying ? 'Pause video' : 'Play video'} style={[styles.bigPlayBtn, { backgroundColor: theme.colors.accent }]} onPress={() => {
+                controls.reveal()
+                if (isPlaying) player.pause()
+                else { if (player.duration > 0 && player.currentTime >= player.duration) player.currentTime = 0; player.play() }
+              }}>
+                {status === 'loading' ? <ActivityIndicator color="#FFFFFF" /> : isPlaying ? <Pause size={32} color="#FFFFFF" fill="#FFFFFF" /> : <Play size={32} color="#FFFFFF" fill="#FFFFFF" />}
+              </TouchableOpacity>
+              <TouchableOpacity accessibilityLabel="Forward ten seconds" style={styles.centerAction} onPress={() => seek((player.currentTime + 10) * 1000)}><RotateCw size={26} color="#FFFFFF" /><Text style={styles.seekBadge}>+10s</Text></TouchableOpacity>
+              <TouchableOpacity accessibilityLabel="Next video" style={[styles.hudCircleBtn, currentIndex >= queue.length - 1 && { opacity: 0.35 }]} disabled={currentIndex >= queue.length - 1} onPress={() => skip('next')}><SkipForward size={24} color="#FFFFFF" /></TouchableOpacity>
+            </View>
+          )}
+          <VideoTimeline player={player} media={media} onSeek={seek} onScrubStart={() => setScrubbing(true)} onScrubEnd={() => { setScrubbing(false); controls.reveal() }} />
         </View>
       )}
-
-      {/* Speed Modal */}
-      <SpeedModal
-        visible={speedModalVisible}
-        currentSpeed={currentSpeed}
-        isVideo={true}
-        onSelectSpeed={handleSelectSpeed}
-        onClose={() => setSpeedModalVisible(false)}
-      />
-
-      {/* Subtitles Modal (Section 23) */}
-      <Modal visible={subtitleModalVisible} transparent animationType="fade" onRequestClose={() => setSubtitleModalVisible(false)}>
+      <SpeedModal visible={speedVisible} currentSpeed={speed} isVideo onSelectSpeed={(value) => { player.playbackRate = value; setSpeed(value); persist() }} onClose={() => { setSpeedVisible(false); controls.reveal() }} />
+      <Modal visible={subtitlesVisible} transparent animationType="fade" onRequestClose={() => setSubtitlesVisible(false)}>
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalBox, { backgroundColor: theme.colors.surfaceElevated, borderColor: theme.colors.border, borderRadius: radii.xl }]}>
             <Text style={[styles.modalTitle, { color: theme.colors.textPrimary }]}>Subtitles</Text>
-            {['Off', 'Track 1 (Embedded)', 'Track 2 (English)'].map((sub) => {
-              const selected = selectedSubtitle === sub
-              return (
-                <TouchableOpacity
-                  key={sub}
-                  style={[styles.modalRow, selected && { backgroundColor: theme.colors.accentSubtle, borderRadius: radii.md }]}
-                  onPress={() => {
-                    setSelectedSubtitle(sub)
-                    setSubtitleModalVisible(false)
-                  }}
-                >
-                  <Text style={[styles.modalRowText, { color: selected ? theme.colors.accentLight : theme.colors.textPrimary }]}>
-                    {sub}
-                  </Text>
-                  {selected && <Check size={18} color={theme.colors.accentLight} />}
-                </TouchableOpacity>
-              )
-            })}
+            {[null, ...subtitleTracks].map((track, index) => (
+              <TouchableOpacity key={track?.id || index} style={styles.modalRow} onPress={() => { player.subtitleTrack = track; setSubtitle(track); setSubtitlesVisible(false); controls.reveal() }}>
+                <Text style={[styles.modalRowText, { color: theme.colors.textPrimary }]}>{track ? track.label || track.language || `Track ${index}` : 'Off'}</Text>
+                {subtitle === track && <Check size={18} color={theme.colors.accentLight} />}
+              </TouchableOpacity>
+            ))}
+            {!subtitleTracks.length && <Text style={{ color: theme.colors.textSecondary, padding: 12 }}>This video has no embedded subtitles.</Text>}
           </View>
         </View>
       </Modal>
@@ -458,8 +237,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#000000'
   },
   hudOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    ...StyleSheet.absoluteFill,
     justifyContent: 'space-between',
     paddingHorizontal: 20
   },
@@ -504,7 +282,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 20
+    gap: 8
   },
   hudCircleBtn: {
     width: 44,

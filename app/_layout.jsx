@@ -60,7 +60,7 @@ function NavigationBar() {
             activeOpacity={0.7}
             onPress={() => {
               if (pathname !== item.route) {
-                router.push(item.route)
+                router.navigate(item.route)
               }
             }}
           >
@@ -104,6 +104,7 @@ function RootContent() {
         <Stack
           screenOptions={{
             headerShown: false,
+            freezeOnBlur: true,
             animation: 'fade',
             contentStyle: { backgroundColor: theme.colors.background }
           }}

@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
   Platform
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useRouter, useFocusEffect } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   Video as VideoIcon,
@@ -30,7 +30,7 @@ import {
   getFavorites,
   getRecentlyPlayed,
   toggleFavorite,
-  getPlaybackState
+  getPlaybackStates
 } from '../../src/database/db'
 import { scanLocalMedia, pickFilesAndImport, scanCustomFolderSAF } from '../../src/services/mediaScanner/mediaScanner'
 import { VideoCard } from '../../src/components/VideoCard'
@@ -120,47 +120,26 @@ export default function VideosScreen() {
 
   const loadData = useCallback(async () => {
     try {
-      let list = []
-      if (activeTab === 'all') {
-        list = (await getAllMediaItems({ type: 'video', sortBy: 'title', order: 'ASC' }).catch(() => [])) || []
-      } else if (activeTab === 'folders') {
-        const folderList = (await getFoldersSummary('video').catch(() => [])) || []
-        setFolders(folderList)
-      } else if (activeTab === 'favorites') {
-        list = (await getFavorites('video').catch(() => [])) || []
-      } else if (activeTab === 'recent') {
-        list = (await getRecentlyPlayed('video').catch(() => [])) || []
-      }
-      setVideos(list || [])
-
-      // Preload favorites map and resume positions
-      const favList = (await getFavorites('video').catch(() => [])) || []
-      const fMap = {}
-      favList.forEach((f) => {
-        fMap[f.id] = true
-      })
-      setFavoritesMap(fMap)
-
-      const positions = {}
-      for (const item of (list || [])) {
-        try {
-          const state = await getPlaybackState(item.id)
-          if (state && state.position > 5000) {
-            positions[item.id] = state.position
-          }
-        } catch {}
-      }
-      setResumePositions(positions)
-    } catch (e) {
-      console.warn('Error loading video data:', e)
-    } finally {
-      setRefreshing(false)
+      const [list, folderList, favList] = await Promise.all([
+        activeTab === 'all' ? getAllMediaItems({ type: 'video' })
+          : activeTab === 'favorites' ? getFavorites('video')
+          : activeTab === 'recent' ? getRecentlyPlayed('video') : Promise.resolve([]),
+        activeTab === 'folders' ? getFoldersSummary('video') : Promise.resolve([]),
+        getFavorites('video')
+      ])
+      const states = await getPlaybackStates(list.map((item) => item.id))
+      setVideos(list)
+      setFolders(folderList)
+      setFavoritesMap(Object.fromEntries(favList.map((item) => [item.id, true])))
+      setResumePositions(Object.fromEntries(states.filter((state) => state.position > 5000).map((state) => [state.mediaId, state.position])))
+    } catch (error) {
+      console.warn('Error loading videos:', error)
     }
   }, [activeTab])
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     loadData()
-  }, [loadData])
+  }, [loadData]))
 
   const handleToggleFavorite = async (video) => {
     const isNowFav = await toggleFavorite(video.id, 'video')

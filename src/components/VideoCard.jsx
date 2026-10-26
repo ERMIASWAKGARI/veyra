@@ -9,9 +9,9 @@ export function VideoCard({
   video,
   resumePosition = 0,
   isFavorite = false,
-  onPress,
-  onToggleFavorite,
-  onMorePress
+  onPress = undefined,
+  onToggleFavorite = undefined,
+  onMorePress = undefined
 }) {
   const { theme, spacing, radii, typography } = useTheme()
 
